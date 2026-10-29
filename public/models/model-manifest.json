@@ -1,0 +1,60 @@
+{
+  "zooRevision": "48b10fa505aeb51fbd127fc60a5c660040e823b7",
+  "preprocessingVersion": "opencv-yunet640-sface-rgb112-v1",
+  "qualityPolicyVersion": "quality-v1-experimental",
+  "runtimeVersion": "1.23.2",
+  "opencvVersion": "4.12.0",
+  "executionProvider": "wasm",
+  "embeddingDimension": 128,
+  "detector": {
+    "folder": "face_detection_yunet",
+    "name": "face_detection_yunet_2023mar.onnx",
+    "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    "url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    "input": "input",
+    "dimensions": [
+      1,
+      3,
+      640,
+      640
+    ],
+    "outputs": [
+      "cls_8",
+      "cls_16",
+      "cls_32",
+      "obj_8",
+      "obj_16",
+      "obj_32",
+      "bbox_8",
+      "bbox_16",
+      "bbox_32",
+      "kps_8",
+      "kps_16",
+      "kps_32"
+    ]
+  },
+  "recognizer": {
+    "folder": "face_recognition_sface",
+    "name": "face_recognition_sface_2021dec.onnx",
+    "sha256": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+    "url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+    "input": "data",
+    "dimensions": [
+      1,
+      3,
+      112,
+      112
+    ],
+    "outputs": [
+      "fc1"
+    ]
+  },
+  "qualityPolicy": {
+    "detectorThreshold": 0.8,
+    "nmsThreshold": 0.3,
+    "minFacePixels": 60,
+    "minBlurVariance": 15,
+    "minBrightness": 25,
+    "maxBrightness": 235
+  }
+}

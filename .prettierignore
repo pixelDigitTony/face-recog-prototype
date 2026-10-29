@@ -1,0 +1,10 @@
+node_modules
+dist
+public/runtime
+public/models
+public/licenses
+tests/fixtures
+.local
+test-results
+playwright-report
+package-lock.json

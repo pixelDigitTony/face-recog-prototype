@@ -1,0 +1,387 @@
+' Implemented frontend prototype; acceptance evidence: IMPLEMENTATION.md.
+' Companion: STK_FACE_RECOGNITION_PROTOTYPE_SPEC.md
+' Five named diagrams in one editable PlantUML source file.
+
+@startuml stk_face_prototype_components
+title STK face prototype - frontend component boundaries
+top to bottom direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+actor Tester
+cloud "Static asset host / localhost" as Assets {
+  artifact "React build, ONNX weights, manifest\nOpenCV.js and ORT WASM assets" as Files
+}
+
+node "Browser - prototype origin" as Browser {
+  component "Standalone React JS shell\nMUI theme and React Router" as Shell
+  component "Face recognition feature\nEnroll / Scan / Database / Settings" as Feature
+  component "FaceWorkflow" as WorkflowPort <<interface>>
+  component "BrowserFaceWorkflow\nenroll / verify / delete" as Workflow
+  component "PrototypeRepository" as RepositoryPort <<interface>>
+  component "LocalStorageRepository\nvalidation / commit queue / subscriptions" as Repository
+  component "Writer coordinator\nexclusive Web Lock" as Writer
+  database "localStorage\none scoped JSON envelope" as Storage
+  component "FaceEngine" as EnginePort <<interface>>
+  component "BrowserFaceEngine\nworker client" as Engine
+  component "Camera hook\ngetUserMedia and Canvas" as Camera
+  node "Dedicated Web Worker" as Worker {
+    component "Model loader and image adapters" as Adapters
+    component "OpenCV.js\npreprocessing and alignment" as CV
+    component "ONNX Runtime Web / WASM\nYuNet detection and SFace embedding" as ORT
+  }
+}
+
+Tester --> Shell
+Shell --> Feature : inject services and scope
+Feature --> WorkflowPort : workflow hooks
+WorkflowPort <|.. Workflow
+Feature --> RepositoryPort : query / subscribe / export
+Feature --> Camera : explicit camera controls
+Camera --> Workflow : captured frame
+Workflow --> RepositoryPort : scoped operations
+RepositoryPort <|.. Repository
+Repository --> Writer : require writer ownership
+Repository --> Storage : one setItem per commit
+Storage --> Repository : reload / storage events
+Workflow --> EnginePort : extract
+EnginePort <|.. Engine
+Engine --> Adapters : requestId + frame
+Adapters --> CV
+Adapters --> ORT
+Files --> Shell : static downloads only
+Files --> Adapters : static model/runtime assets
+
+note bottom of Workflow
+  Only 1:1 verification of the selected person.
+  Similarity and liveness are separate concepts.
+  All prototype decisions are non-authoritative.
+end note
+
+note bottom of Storage
+  People, templates, capture attempts, settings and metadata.
+  Other tabs are read-only; no remote database or API.
+  No model binaries or full video in localStorage.
+end note
+
+note top of Feature
+  Public entry supports an existing STK theme/router.
+  Later: inject an STK API workflow adapter for
+  server-authoritative enrollment and verification.
+end note
+@enduml
+
+@startuml stk_face_prototype_domain
+title STK face prototype - localStorage domain model
+hide methods
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+
+class PrototypeDatabase {
+  schemaVersion : integer = 1
+  databaseId : UUID
+  revision : integer
+  createdAt : UTC timestamp
+  updatedAt : UTC timestamp
+  scope : environment + companyId
+}
+
+class Person {
+  id : UUID
+  companyId : string
+  storeId : string or null
+  employeeCode : string
+  normalizedEmployeeCode : string
+  displayName : string
+  department : string or null
+  acknowledgedAt : UTC timestamp or null
+  activeTemplateId : UUID or null
+  createdAt / updatedAt : UTC timestamps
+}
+
+class FaceTemplate {
+  id / personId : UUID
+  companyId / storeId : scope
+  version : integer
+  embedding : number[128]
+  modelIdentity : ModelIdentity
+  preprocessingVersion : string
+  qualityPolicyVersion : string
+  quality : measured values
+  thumbnailDataUrl : string or null
+  createdAt : UTC timestamp
+}
+
+class CaptureAttempt {
+  id / personId : UUID
+  purpose : enroll | verify
+  companyId / storeId : scope
+  personSnapshot : code + name
+  templateId / templateVersion : nullable snapshot
+  startedAt / completedAt : UTC timestamps
+  capturedAt : UTC timestamp or null
+  outcome : Outcome
+  reasonCode : string or null
+  similarity : number or null
+  thresholdSnapshot : number
+  modelIdentity : ModelIdentity or null
+  preprocessingVersion : string or null
+  qualityPolicyVersion : string or null
+  quality / timingsMs : available measurements
+  probeEmbedding : number[128] or null
+  thumbnailDataUrl : string or null
+  livenessStatus = not_implemented
+}
+
+class ModelIdentity {
+  detector / recognizer filenames
+  detector / recognizer hashes and versions
+  runtimeVersion : string
+  executionProvider : wasm
+  embeddingDimension : integer = 128
+}
+
+class Settings {
+  matchThreshold : number = 0.363
+  saveThumbnails : boolean = true
+  maxPeople : integer = 50
+  maxAttempts : integer = 200
+  maxEstimatedBytes : integer = 3145728
+  displayTimeZone : Asia/Manila
+}
+
+enum Outcome {
+  ENROLLED
+  MATCH
+  NO_MATCH
+  NO_FACE
+  MULTIPLE_FACES
+  LOW_QUALITY
+  NOT_ENROLLED
+  MODEL_MISMATCH
+  CAMERA_ERROR
+  MODEL_ERROR
+  INFERENCE_ERROR
+}
+
+PrototypeDatabase "1" *-- "0..50" Person
+PrototypeDatabase "1" *-- "0..50" FaceTemplate
+PrototypeDatabase "1" *-- "0..200" CaptureAttempt
+PrototypeDatabase "1" *-- "1" Settings
+Person "1" -- "0..1" FaceTemplate : active enrollment
+Person "1" -- "0..*" CaptureAttempt : capture history
+FaceTemplate *-- ModelIdentity : snapshot
+CaptureAttempt *-- "0..1" ModelIdentity : snapshot
+CaptureAttempt --> Outcome
+CaptureAttempt ..> FaceTemplate : historical ID/version only
+
+note bottom of PrototypeDatabase
+  Storage key: stk:face-prototype:v1:environment:companyId:db
+  Each successful mutation replaces one validated envelope.
+  Actual byte capacity may be reached before record caps.
+end note
+
+note bottom of CaptureAttempt
+  Only committed attempts appear in the database table.
+  Unsaved results remain transient in UI memory.
+  Null means unavailable, never a fabricated measurement.
+end note
+@enduml
+
+@startuml stk_face_prototype_enrollment
+title STK face prototype - enrollment and replacement
+autonumber
+skinparam shadowing false
+actor Tester
+participant "MUI enrollment page" as UI
+participant "Camera hook" as Camera
+participant "BrowserFaceWorkflow" as Flow
+participant "FaceEngine / worker" as Engine
+participant "LocalStorageRepository" as Repo
+database "localStorage" as DB
+
+note over UI, Repo
+  Existing test person and acknowledgement are saved.
+  Camera/models are ready; this tab owns the writer lock.
+end note
+Tester -> UI : Capture enrollment / Replace template
+UI -> Camera : capture original unmirrored frame
+Camera --> UI : frame or capture error
+UI -> Flow : enroll(personId, scope, frame/error, attemptId)
+Flow -> Repo : load latest person and template version
+Repo --> Flow : validated scoped records
+
+alt captured frame available
+  Flow -> Engine : extract(frame, pinned model/quality settings)
+  Engine --> Flow : quality + normalized embedding OR rejection/error
+else capture failed after attempt began
+  Flow -> Flow : prepare CAMERA_ERROR outcome
+end
+
+alt usable embedding and exactly one face
+  Flow -> Flow : prepare new template + ENROLLED attempt
+  Flow -> Repo : commit(template + person link + attempt)
+else processing rejected or failed
+  Flow -> Repo : commit(failed enrollment attempt only)
+end
+
+Repo -> Repo : queue; validate latest person/template, scope, caps and lock
+alt valid operation within capacity
+  Repo -> DB : setItem(key, complete next envelope)
+  alt storage write succeeds
+    DB --> Repo : success
+    Repo --> Flow : committed revision
+    Repo -> UI : notify committed database subscription
+    Flow --> UI : outcome, persisted=true
+    UI --> Tester : saved enrollment or saved rejection
+  else storage write throws
+    DB --> Repo : quota / storage error
+    Repo --> Flow : persistence error; old envelope preserved
+    Flow --> UI : outcome, persisted=false, same attemptId
+    UI --> Tester : Not saved; retry / export / manage storage
+  end
+else invalid operation or capacity reached
+  Repo --> Flow : rejected commit; no write
+  Flow --> UI : outcome, persisted=false, actionable error
+  UI --> Tester : Not saved; previous enrollment retained
+end
+
+note over Flow, DB
+  Never remove the old template before a replacement commit succeeds.
+  Retry save reuses the attempt ID and does not repeat inference.
+end note
+@enduml
+
+@startuml stk_face_prototype_verification
+title STK face prototype - 1:1 verification and saved table rows
+autonumber
+skinparam shadowing false
+actor Tester
+participant "MUI scan page" as UI
+participant "BrowserFaceWorkflow" as Flow
+participant "Camera / FaceEngine worker" as Engine
+participant "LocalStorageRepository" as Repo
+database "localStorage" as DB
+participant "MUI database table" as Table
+
+Tester -> UI : Select enrolled person; Scan face
+UI -> Flow : verify(personId, scope, attemptId)
+Flow -> Repo : load latest person, template and settings
+Repo --> Flow : validated snapshot
+Flow -> Flow : freeze identity, template version and threshold
+
+alt template absent or incompatible
+  Flow -> Flow : NOT_ENROLLED or MODEL_MISMATCH
+else compatible enrollment
+  Flow -> Engine : capture; detect; align; extract
+  Engine --> Flow : embedding + measurements OR rejection/error
+  alt usable embedding
+    Flow -> Flow : cosine similarity against selected template only
+    Flow -> Flow : MATCH if score >= threshold; otherwise NO_MATCH
+  else camera, quality or inference failure
+    Flow -> Flow : assign explicit failure outcome
+  end
+end
+
+Flow -> Repo : commit completed attempt
+Repo -> Repo : queue; validate person/template, lock, scope, ID and capacity
+alt commit allowed
+  Repo -> DB : setItem(key, next envelope)
+  alt write succeeded
+    DB --> Repo : success
+    Repo --> Flow : persisted=true, revision
+    Repo -> Table : notify committed snapshot
+    Table -> Repo : query attempts with active filters
+    Repo --> Table : saved rows
+    Flow --> UI : saved comparison / rejection result
+  else write failed
+    DB --> Repo : exception
+    Repo --> Flow : persisted=false
+    Flow --> UI : result retained in memory; Not saved
+    note over UI, Table
+      No saved table row is created for the unsaved attempt.
+      Existing committed rows remain available.
+    end note
+  end
+else capacity / validation / ownership failure
+  Repo --> Flow : persisted=false, stable error code
+  Flow --> UI : Not saved; show recovery action
+end
+
+opt tester retries an unsaved result
+  Tester -> UI : Retry save
+  UI -> Flow : retry pending commit with same attemptId
+  Flow -> Repo : idempotent commit, no repeat inference
+  Repo --> Flow : committed or still unsaved
+  Flow --> UI : updated persistence status
+end
+
+note over UI, Table
+  Result is non-authoritative; liveness is not implemented.
+  No attendance API is called.
+end note
+@enduml
+
+@startuml stk_face_prototype_capture_states
+title STK face prototype - capture and persistence states
+skinparam shadowing false
+
+state "Initialize models and database" as Initializing
+state "Readiness error" as ReadinessError
+state "Read-only / recovery mode" as ReadOnly
+state "Ready" as Ready
+state "Validate selected person and template" as Validating
+state "Capture frame" as Capturing
+state "Detect and assess quality" as Detecting
+state "Align and extract embedding" as Extracting
+state "Compare selected person" as Comparing
+state "Prepare terminal attempt" as Prepared
+state "Commit to localStorage" as Saving
+state "Saved result" as Saved
+state "Result not saved" as Unsaved
+state "Disposed" as Disposed
+
+[*] --> Initializing
+Initializing --> Ready : assets + database + camera ready; writer lock acquired
+Initializing --> ReadinessError : model or browser capability failure
+Initializing --> ReadOnly : observer tab / corrupt schema / no Web Locks
+ReadinessError --> Initializing : explicit retry
+ReadOnly --> Initializing : supported recovery or acquire writer lock
+Ready --> Validating : explicit capture; freeze context and attempt ID
+Validating --> Capturing : person valid; compatible template for verification
+Validating --> Prepared : NOT_ENROLLED / MODEL_MISMATCH
+Capturing --> Detecting : frame available
+Capturing --> Prepared : CAMERA_ERROR
+Detecting --> Extracting : exactly one usable face
+Detecting --> Prepared : unusable face / processing error
+Extracting --> Comparing : valid embedding; purpose=verify
+Extracting --> Prepared : valid embedding; purpose=enroll
+Extracting --> Prepared : alignment or inference error
+Comparing --> Prepared : MATCH / NO_MATCH / incompatible template
+Prepared --> Saving : build record and operation
+Saving --> Saved : validated setItem succeeds
+Saving --> Unsaved : quota / capacity / storage / validation failure
+Unsaved --> Saving : Retry save with same attempt ID
+Unsaved --> Ready : explicitly discard pending result
+Saved --> Ready : next capture
+Ready --> Disposed : navigate away
+Validating --> Disposed : cancel / unmount
+Capturing --> Disposed : cancel / unmount
+Detecting --> Disposed : cancel / unmount
+Extracting --> Disposed : cancel / unmount
+Comparing --> Disposed : cancel / unmount
+Unsaved --> Disposed : unmount; pending result is not persisted
+Disposed --> [*]
+
+note right of Unsaved
+  No saved row or saved-success message.
+  Existing database remains unchanged.
+  Never retry by inventing a new attempt ID.
+end note
+
+note right of Disposed
+  Stop camera tracks; dispose resources.
+  Ignore late worker responses.
+  No implicit success or partial enrollment.
+end note
+@enduml
