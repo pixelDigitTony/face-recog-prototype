@@ -1,3 +1,5 @@
+import { LIVE_TIMING } from './liveTiming';
+
 export const LIVE_POLICY = 'live-85-strict-v1';
 export const SCORE_MAPPING = 'cosine-positive-percent-v1';
 export function percentage(score) {
@@ -26,7 +28,7 @@ export function createStableWindow() {
       if (
         prior &&
         (timestamp <= prior.timestamp ||
-          timestamp - prior.timestamp > 1000 ||
+          timestamp - prior.timestamp > LIVE_TIMING.maxObservationGapMs ||
           passed !== prior.passed)
       )
         samples = [];

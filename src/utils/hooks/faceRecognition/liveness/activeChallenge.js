@@ -1,3 +1,5 @@
+import { LIVE_TIMING } from '../recognition/liveTiming';
+
 export function createActiveChallenge({
   random = () => crypto.getRandomValues(new Uint32Array(1))[0] % 2,
 } = {}) {
@@ -28,7 +30,9 @@ export function createActiveChallenge({
         !fresh ||
         !Number.isFinite(yaw) ||
         (lastTime !== null &&
-          (timestamp <= lastTime || timestamp - lastTime > 500 || Math.abs(yaw - lastYaw) > 25))
+          (timestamp <= lastTime ||
+            timestamp - lastTime > LIVE_TIMING.maxObservationGapMs ||
+            Math.abs(yaw - lastYaw) > 25))
       ) {
         reset();
         return state;

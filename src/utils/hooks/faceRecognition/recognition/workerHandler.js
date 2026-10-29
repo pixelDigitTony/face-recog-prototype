@@ -44,8 +44,8 @@ export async function handleWorkerRequest({ type, payload }) {
       outcome: faces.length === 0 ? 'NO_FACE' : faces.length > 1 ? 'MULTIPLE_FACES' : null,
     };
     if (faces.length === 1) {
-      const quality = assessQuality(cv, source, faces[0], manifest.qualityPolicy);
-      result.quality = quality.metrics;
+      const quality = result.faces[0];
+      result.quality = quality.quality;
       if (quality.reasonCode) {
         result.outcome = 'LOW_QUALITY';
         result.reasonCode = quality.reasonCode;

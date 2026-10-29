@@ -40,7 +40,9 @@ export function useLiveFaceTracking(personId, purpose) {
       scheduler.current?.stop();
       scheduler.current = createFrameScheduler(
         cameraRef.current.videoRef.current,
-        async (timestamp) => {
+        async () => {
+          // The video callback's timestamp can predate this capture under load.
+          const timestamp = performance.now();
           const frame = await cameraRef.current.capture();
           await live.process(frame, timestamp);
         },

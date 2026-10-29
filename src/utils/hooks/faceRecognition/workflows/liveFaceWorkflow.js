@@ -4,6 +4,7 @@ import { createStableWindow } from '../recognition/matchPolicy';
 import { cosineSimilarity } from '../recognition/cosineSimilarity';
 import { compatibleTemplate } from './faceWorkflow';
 import { thumbnail } from '../recognition/imageQuality';
+import { LIVE_TIMING } from '../recognition/liveTiming';
 
 export function createLiveFaceWorkflow({
   repository,
@@ -31,6 +32,7 @@ export function createLiveFaceWorkflow({
     lastComparison = -Infinity,
     trackId = null,
     lastExtracted = null,
+    pipelineStartedAt = null,
     controller;
   const publish = (patch) => {
     state = { ...state, ...patch };
@@ -82,6 +84,8 @@ export function createLiveFaceWorkflow({
           ...live,
           method: 'active_head_turn_v1',
           policyVersion: 'head-turn-v1',
+          timingPolicyVersion: LIVE_TIMING.version,
+          timingPolicy: LIVE_TIMING,
           assetIdentity: liveness.manifest?.sha256 ?? null,
         },
         metadata: {
@@ -115,7 +119,15 @@ export function createLiveFaceWorkflow({
       clearEvidence();
       lastComparison = -Infinity;
       controller = new AbortController();
-      publish({ status: 'loading', faces: [], result: null, error: null });
+      publish({
+        status: 'loading',
+        faces: [],
+        result: null,
+        error: null,
+        analysisCompletedAt: null,
+        lastFrameAt: null,
+        latencyMs: null,
+      });
       const token = generation;
       await repository.load();
       if (repository.getSnapshot().mode !== 'writable')
@@ -158,6 +170,7 @@ export function createLiveFaceWorkflow({
     async process(frame, timestamp) {
       if (processing || ['idle', 'stopped', 'loading', 'error'].includes(state.status)) return;
       processing = true;
+      pipelineStartedAt = now();
       const token = generation;
       try {
         if (session && !session.completed && !valid())
@@ -172,12 +185,16 @@ export function createLiveFaceWorkflow({
         );
         const extracted = await engine.analyzeFrame(frame, { includeEmbedding });
         if (token !== generation) return;
+        if (now() - timestamp > LIVE_TIMING.maxFrameAgeMs) {
+          clearEvidence();
+          publish({ faces: [], status: session?.completed ? state.status : 'analysis_delayed' });
+          return;
+        }
         const tracked = tracker.update(extracted.faces, timestamp);
         publish({
           faces: tracked.faces,
           frameSize: [frame.width, frame.height],
           lastFrameAt: timestamp,
-          latencyMs: now() - timestamp,
         });
         if (!session || session.completed) return;
         session.maxFaces = Math.max(session.maxFaces, tracked.faces.length);
@@ -210,7 +227,12 @@ export function createLiveFaceWorkflow({
         trackId = face.trackId;
         const pose = await liveness.observe(frame, timestamp);
         if (token !== generation) return;
-        const fresh = now() - timestamp <= 500;
+        const fresh = now() - timestamp <= LIVE_TIMING.maxFrameAgeMs;
+        if (!fresh) {
+          clearEvidence();
+          publish({ faces: [], status: 'analysis_delayed' });
+          return;
+        }
         if (!pose.box || boxIoU(pose.box, face.box) < 0.35 || !Number.isFinite(pose.yaw)) {
           clearEvidence();
           publish({ status: 'quality_blocked' });
@@ -266,13 +288,16 @@ export function createLiveFaceWorkflow({
         }
       } finally {
         processing = false;
+        pipelineStartedAt = null;
+        if (token === generation)
+          publish({ latencyMs: now() - timestamp, analysisCompletedAt: now() });
       }
     },
     async enroll() {
       if (
         state.status !== 'ready_to_enroll' ||
         !lastExtracted ||
-        now() - state.lastFrameAt > 500 ||
+        now() - state.lastFrameAt > LIVE_TIMING.maxFrameAgeMs ||
         now() > challenge.snapshot().expiresAt ||
         state.faces.length !== 1
       )
@@ -288,7 +313,11 @@ export function createLiveFaceWorkflow({
       publish({ result: null, status: 'completed' });
     },
     stale() {
-      if (state.faces.length && now() - state.lastFrameAt > 500) {
+      const stalled = processing
+        ? now() - pipelineStartedAt > LIVE_TIMING.stalledAfterMs
+        : state.analysisCompletedAt !== null &&
+          now() - state.analysisCompletedAt > LIVE_TIMING.stalledAfterMs;
+      if (state.faces.length && stalled) {
         clearEvidence();
         publish({ faces: [], status: session?.completed ? state.status : 'analysis_delayed' });
       }

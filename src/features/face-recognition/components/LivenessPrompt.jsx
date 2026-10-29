@@ -4,7 +4,7 @@ export function LivenessPrompt({ liveness, status }) {
     status === 'multiple_faces'
       ? 'Only one person may complete verification at a time'
       : status === 'analysis_delayed'
-        ? 'Analysis delayed — hold still'
+        ? 'Analysis is taking too long. Keep one face in view; close other heavy tabs or try another device.'
         : status === 'quality_blocked'
           ? 'Face the camera in even lighting'
           : liveness.prompt;

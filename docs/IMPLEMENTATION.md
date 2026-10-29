@@ -1,5 +1,15 @@
 # Implementation and validation record
 
+## CPU timing correction — 2026-10-29
+
+Reproduced the deployed **Analysis delayed** loop using controlled 411 ms recognition passes, pose-worker delays and watchdog ticks during inference. Both the 500 ms observation-gap limit and the watchdog's use of capture age revoked otherwise continuous progress. The UI also displayed recognition time before pose inference, understating the full pipeline cost.
+
+`liveTiming.js` now defines the explicit `cpu-cadence-v2` budget: maximum frame age, inter-observation gap and stalled-pipeline limit of 1.5 seconds. The watchdog distinguishes in-flight work from the last completed pipeline. True capture timestamps still govern evidence age; the UI's full-analysis measurement includes pose work. New attempts retain the timing policy with liveness evidence. Track continuity and stable comparisons use the same bounded observation gap. The strict >85% cutoff, three comparisons, pose/hold requirements, multiple-face rejection and five-second liveness expiry remain enforced. Single-face quality is assessed once per frame instead of twice.
+
+Regression coverage includes complete synthetic motion-and-match sessions at 0, 561 and 1,000 ms pipeline costs, progress at 411 ms recognition, genuine stalls, and rejection of frames older than the fixed budget. These tests exercise the timing failure deterministically; physical webcam and deployed-device acceptance remain necessary.
+
+Validation: **49 unit tests passed; 11 development Chrome tests passed; production-preview Chrome: 8 passed, 3 development-only cases skipped**. Production build, formatting and patch checks passed. No Vercel deployment was performed by this correction.
+
 ## Live tracking extension — 2026-10-29
 
 Implemented the [live extension](STK_LIVE_FACE_TRACKING_SPEC.md) in the renamed `face-recog-prototype/` project. Enrollment and verification now start an explicit camera session. YuNet returns every post-NMS box/confidence/quality result; the UI mirrors and scales overlays and exposes an accessible detected-face list. Temporary geometric track IDs do not identify additional people. Multiple, missing, poor-quality or ambiguous faces revoke pending liveness and matching evidence.

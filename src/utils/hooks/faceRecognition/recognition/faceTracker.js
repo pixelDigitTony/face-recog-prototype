@@ -1,3 +1,5 @@
+import { LIVE_TIMING } from './liveTiming';
+
 export function boxIoU(a, b) {
   const intersection =
     Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0])) *
@@ -13,7 +15,7 @@ export function createFaceTracker() {
       nextId = 1;
     },
     update(faces, now) {
-      const previous = tracks.filter((t) => now - t.seenAt <= 1000);
+      const previous = tracks.filter((t) => now - t.seenAt <= LIVE_TIMING.maxObservationGapMs);
       const used = new Set();
       let ambiguous = false;
       const current = faces.map((face) => {

@@ -254,7 +254,7 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
               />
               {live.latencyMs != null && (
                 <Typography variant="caption">
-                  Latest analysis: {Math.round(live.latencyMs)} ms
+                  Full analysis: {Math.round(live.latencyMs)} ms
                 </Typography>
               )}
             </CardContent>

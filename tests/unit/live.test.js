@@ -95,7 +95,7 @@ describe('motion challenge', () => {
     let { time } = drive(c, [...Array(8).fill(0), ...Array(12).fill(-25)]);
     expect(c.snapshot().status).not.toBe('passed_basic');
     expect(c.snapshot().step).toBe(0);
-    expect(c.update({ yaw: 0, timestamp: time + 1000 }).status).toBe('not_checked');
+    expect(c.update({ yaw: 0, timestamp: time + 2000 }).status).toBe('not_checked');
   });
   it('times out an unanswered challenge and rejects pose jumps', () => {
     const c = createActiveChallenge({ random: () => 1 });
@@ -210,11 +210,19 @@ describe('tracking and migration', () => {
     expect(() => validateDatabase(db, scope)).toThrow(/evidence/);
   });
 });
-async function liveHarness() {
+async function liveHarness({ recognitionMs = 0, poseMs = 0, purpose = 'verify' } = {}) {
   let raw = null,
     time = 0,
     yaw = 0,
     faces = [face];
+  let live;
+  function work(duration) {
+    const end = time + duration;
+    while (time < end) {
+      time = Math.min(end, time + 100);
+      live?.stale();
+    }
+  }
   const repo = createLocalStorageRepository({
     context: scope,
     storage: { getItem: () => raw, setItem: (_k, v) => (raw = v) },
@@ -254,22 +262,28 @@ async function liveHarness() {
   const engine = {
     manifest,
     initialize: async () => manifest,
-    analyzeFrame: async (_f, options) => ({
-      faces,
-      embedding: options.includeEmbedding ? embedding : null,
-      modelIdentity: manifest,
-      preprocessingVersion: 'v1',
-      quality: { faceCount: faces.length },
-      timingsMs: {},
-    }),
+    analyzeFrame: async (_f, options) => {
+      work(recognitionMs);
+      return {
+        faces,
+        embedding: options.includeEmbedding ? embedding : null,
+        modelIdentity: manifest,
+        preprocessingVersion: 'v1',
+        quality: { faceCount: faces.length },
+        timingsMs: {},
+      };
+    },
   };
   const liveness = {
     manifest: { sha256: 'liveness' },
     initialize: async () => {},
-    observe: async () => ({ yaw, box: face.box }),
+    observe: async () => {
+      work(poseMs);
+      return { yaw, box: face.box };
+    },
   };
   const workflow = createFaceWorkflow({ repository: repo, engine, context: scope });
-  const live = createLiveFaceWorkflow({
+  live = createLiveFaceWorkflow({
     repository: repo,
     engine,
     liveness,
@@ -277,7 +291,7 @@ async function liveHarness() {
     context: scope,
     now: () => time,
   });
-  await live.start({ personId: 'p' });
+  await live.start({ personId: 'p', purpose });
   return {
     live,
     repo,
@@ -291,23 +305,65 @@ async function liveHarness() {
   };
 }
 describe('live session orchestration', () => {
-  it('completes a real policy session only after ordered liveness and stable comparisons, then deduplicates', async () => {
-    const h = await liveHarness();
-    for (let i = 0; i < 10; i++) await h.step(0);
-    for (let i = 0; i < 4; i++) {
-      const direction = h.live.getSnapshot().liveness.steps[i].direction;
-      const yaw = direction === 'left' ? 25 : direction === 'right' ? -25 : 0;
-      await h.step(yaw === 0 ? (i === 1 ? 10 : -10) : yaw / 2);
-      for (let j = 0; j < 4; j++) await h.step(yaw);
-    }
-    for (let i = 0; i < 14; i++) await h.step(0);
-    const attempts = h.repo.getSnapshot().database.attempts;
-    expect(attempts).toHaveLength(1);
-    expect(attempts[0].outcome).toBe('MATCH');
-    expect(attempts[0].livenessStatus).toBe('passed_basic');
-    expect(attempts[0].stableSampleCount).toBe(3);
-    for (let i = 0; i < 10; i++) await h.step(0);
-    expect(h.repo.getSnapshot().database.attempts).toHaveLength(1);
+  it.each([
+    { recognitionMs: 411, poseMs: 25 },
+    { recognitionMs: 411, poseMs: 150 },
+    { recognitionMs: 700, poseMs: 300 },
+  ])('progresses liveness on a slower CPU with %o and watchdog ticks', async (timing) => {
+    const h = await liveHarness(timing);
+    for (let i = 0; i < 8; i++) await h.step(0);
+    expect(h.live.getSnapshot().liveness.status).toBe('checking');
+    expect(h.live.getSnapshot().status).toBe('challenging');
+    expect(h.repo.getSnapshot().database.attempts).toHaveLength(0);
+  });
+  it.each([
+    { recognitionMs: 0, poseMs: 0 },
+    { recognitionMs: 411, poseMs: 150 },
+    { recognitionMs: 700, poseMs: 300 },
+  ])(
+    'completes ordered liveness and stable comparisons at %o, then deduplicates',
+    async (timing) => {
+      const h = await liveHarness(timing);
+      for (let i = 0; i < 10 && !h.live.getSnapshot().liveness.challengeId; i++) await h.step(0);
+      let previousYaw = 0;
+      for (let i = 0; i < 4; i++) {
+        const direction = h.live.getSnapshot().liveness.steps[i].direction;
+        const yaw = direction === 'left' ? 25 : direction === 'right' ? -25 : 0;
+        await h.step((previousYaw + yaw) / 2);
+        for (let j = 0; j < 6 && h.live.getSnapshot().liveness.step === i; j++) await h.step(yaw);
+        expect(h.live.getSnapshot().liveness.step).toBe(i + 1);
+        previousYaw = yaw;
+      }
+      for (let i = 0; i < 14; i++) await h.step(0);
+      const attempts = h.repo.getSnapshot().database.attempts;
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0].outcome).toBe('MATCH');
+      expect(attempts[0].livenessStatus).toBe('passed_basic');
+      expect(attempts[0].stableSampleCount).toBe(3);
+      for (let i = 0; i < 10; i++) await h.step(0);
+      expect(h.repo.getSnapshot().database.attempts).toHaveLength(1);
+    },
+  );
+  it.each([{ recognitionMs: 1600 }, { recognitionMs: 411, poseMs: 1200 }])(
+    'rejects a frame older than the bounded processing budget at %o',
+    async (timing) => {
+      const h = await liveHarness(timing);
+      await h.step(0);
+      expect(h.live.getSnapshot().status).toBe('analysis_delayed');
+      expect(h.live.getSnapshot().faces).toHaveLength(0);
+      expect(h.live.getSnapshot().liveness.status).toBe('not_checked');
+      expect(h.repo.getSnapshot().database.attempts).toHaveLength(0);
+    },
+  );
+  it('clears evidence when the analysis loop genuinely stops delivering results', async () => {
+    const h = await liveHarness({ recognitionMs: 411, poseMs: 150 });
+    for (let i = 0; i < 6; i++) await h.step(0);
+    expect(h.live.getSnapshot().liveness.challengeId).toBeTruthy();
+    h.advance(1600);
+    h.live.stale();
+    expect(h.live.getSnapshot().status).toBe('analysis_delayed');
+    expect(h.live.getSnapshot().liveness.challengeId).toBeNull();
+    expect(h.live.getSnapshot().similarity).toBeNull();
   });
   it('does not save a high score without liveness and resets on a second face', async () => {
     const h = await liveHarness();
