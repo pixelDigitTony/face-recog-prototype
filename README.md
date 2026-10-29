@@ -93,6 +93,12 @@ Native parity fixtures are checked in. To regenerate them, create a development-
 
 `npm.cmd run build` produces a static `dist/` directory. Test it using `npm.cmd run preview`. Deploy on an HTTPS static host that accepts the SFace model's approximately 38.7 MB file, with SPA fallback to `index.html` and WASM MIME support. Cloudflare Pages' 25 MiB per-asset limit requires a separate, tested asset-serving arrangement; do not upload the current build unchanged there. No deployment was performed by this task.
 
+### Vercel
+
+Use the directory containing `package.json` and `vercel.json` as the Vercel project root, with the **Vite** framework preset, **`npm run build`** build command, and **`dist`** output directory.
+
+The included `vercel.json` rewrites page requests to `index.html` so React Router can resolve `/enroll`, `/scan`, `/database` and `/settings` on direct visits or browser refresh. This follows [Vercel's Vite SPA guidance](https://vercel.com/docs/frameworks/frontend/vite#using-vite-to-make-spas). Commit and push the configuration to the branch Vercel deploys, then wait for a new deployment; the existing deployment cannot pick up local file changes. After deployment, open each page URL directly and refresh it.
+
 ## Models and notices
 
 Exact model provenance and hashes are in `asset-lock.json`; input/output conventions and quality gates are in `public/models/model-manifest.json`. The detector uses its declared **640 × 640** input and BGR 0–255 planes. Five-point alignment produces a **112 × 112** RGB SFace input without unrelated pixel normalization. The OpenCV.js UMD wrapper has a documented `globalThis` adaptation for module workers in `setup-assets.mjs`; the underlying package is pinned.
