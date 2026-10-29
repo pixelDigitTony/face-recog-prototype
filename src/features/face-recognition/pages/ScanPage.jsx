@@ -1,4 +1,4 @@
-import { CaptureWorkspace } from '../components/CaptureWorkspace';
+import { LiveScanWorkspace } from '../components/LiveScanWorkspace';
 export function ScanPage() {
-  return <CaptureWorkspace purpose="verify" />;
+  return <LiveScanWorkspace purpose="verify" />;
 }

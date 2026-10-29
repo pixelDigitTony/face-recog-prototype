@@ -69,6 +69,14 @@ export function createBrowserFaceEngine(baseUrl) {
       await this.initialize();
       return call('extract', { frame, saveThumbnails: options.saveThumbnails }, options.signal);
     },
+    async analyzeFrame(frame, options = {}) {
+      await this.initialize();
+      return call('analyzeFrame', {
+        frame,
+        includeEmbedding: options.includeEmbedding,
+        saveThumbnails: false,
+      });
+    },
     dispose() {
       worker?.terminate();
       worker = null;

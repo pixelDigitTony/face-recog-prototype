@@ -10,6 +10,7 @@ test('real browser enrollment, verification, database, reload and read-only tab'
   const network = [];
   page.on('request', (request) => network.push({ url: request.url(), method: request.method() }));
   await page.goto('/');
+  await page.getByRole('button', { name: 'Use test image', exact: true }).click();
   await page.getByRole('button', { name: 'Add person', exact: true }).click();
   await page.getByLabel('Employee code').fill('TEST-001');
   await page.getByLabel('Full name').fill('Local Test Person');
@@ -19,7 +20,7 @@ test('real browser enrollment, verification, database, reload and read-only tab'
   await page.getByRole('button', { name: 'Load models', exact: true }).click();
   await expect(page.getByText('Models ready', { exact: true })).toBeVisible({ timeout: 90000 });
   await page.getByRole('button', { name: 'Capture & enroll', exact: true }).click();
-  await expect(page.getByText('ENROLLED', { exact: true })).toBeVisible({ timeout: 60000 });
+  await expect(page.getByText('DIAGNOSTIC ONLY', { exact: true })).toBeVisible({ timeout: 60000 });
   await expect(page.getByText('Saved locally', { exact: true })).toBeVisible();
   await page.screenshot({ path: '.local/enrollment-desktop.png', fullPage: true });
   const key = await page.evaluate(() =>
@@ -30,11 +31,16 @@ test('real browser enrollment, verification, database, reload and read-only tab'
   expect(db.attempts).toHaveLength(1);
   expect(db.templates[0].thumbnailDataUrl.length).toBeLessThanOrEqual(4096);
   await page.getByRole('link', { name: 'Scan face', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Use test image', exact: true }).click();
   await page.getByRole('combobox').click();
   await page.getByRole('option', { name: /TEST-001/ }).click();
   await page.getByLabel('Choose test image').setInputFiles(path.resolve('tests/fixtures/lena.jpg'));
+  if (await page.getByRole('button', { name: 'Load models', exact: true }).isVisible()) {
+    await page.getByRole('button', { name: 'Load models', exact: true }).click();
+    await expect(page.getByText('Models ready', { exact: true })).toBeVisible({ timeout: 90000 });
+  }
   await page.getByRole('button', { name: 'Scan face', exact: true }).click();
-  await expect(page.getByText('MATCH', { exact: true })).toBeVisible({ timeout: 60000 });
+  await expect(page.getByText('DIAGNOSTIC ONLY', { exact: true })).toBeVisible({ timeout: 60000 });
   const matched = await page.evaluate(
     (key) => JSON.parse(localStorage.getItem(key)).attempts.at(-1),
     key,
@@ -95,9 +101,13 @@ test('camera preview starts explicitly and releases its stream on navigation', a
 }) => {
   await context.grantPermissions(['camera']);
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Start camera', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: 'Start camera', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Stop camera', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start live scan', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Start live scan', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => document.querySelector('video')?.srcObject?.active), {
+      timeout: 90000,
+    })
+    .toBe(true);
   await page.evaluate(() => {
     window.testTrack = document.querySelector('video').srcObject.getVideoTracks()[0];
   });

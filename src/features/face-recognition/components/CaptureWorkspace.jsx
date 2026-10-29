@@ -74,7 +74,7 @@ export function CaptureWorkspace({ purpose }) {
         <Typography color="text.secondary">
           {isEnrollment
             ? 'Create a local enrollment to start testing face verification.'
-            : 'Select a person and compare one capture with their enrolled face.'}
+            : 'Diagnostic comparison only. Images cannot pass liveness or create a live match.'}
         </Typography>
       </Box>
       <Box
@@ -134,6 +134,7 @@ export function CaptureWorkspace({ purpose }) {
               </Alert>
             )}
             <CameraPreview
+              imageOnly
               camera={camera}
               imageUrl={image?.url}
               onImage={selectImage}

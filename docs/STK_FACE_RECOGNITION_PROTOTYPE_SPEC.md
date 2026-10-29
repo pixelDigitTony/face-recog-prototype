@@ -4,6 +4,8 @@ Status: implemented prototype; see IMPLEMENTATION.md for validation and remainin
 Updated: 2026-10-28.  
 Companion: [UML source](STK_FACE_RECOGNITION_PROTOTYPE_UML.puml).
 
+Implemented extension: [live tracking, multiple-face overlays, above-85% matching and basic liveness](STK_LIVE_FACE_TRACKING_SPEC.md). The extension supersedes the original manual capture and liveness exclusions below; see IMPLEMENTATION.md for validation evidence.
+
 ## 1. Objective and scope
 
 Build a standalone React **JavaScript** prototype with **Material UI (MUI)**. A tester can enroll a person, capture a face, verify it against that person's enrollment, and inspect every saved application record in a localStorage database viewer. All face processing, decisions, and application data storage happen in the browser.

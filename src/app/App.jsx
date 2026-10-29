@@ -188,7 +188,8 @@ export function App() {
               '& .MuiAlert-icon': { color: '#56775c' },
             }}
           >
-            Prototype — data is stored in this browser. Liveness is not checked.
+            Prototype — data stays in this browser. Live camera sessions use a basic motion
+            challenge.
           </Alert>
           {state.mode === 'loading' && <LinearProgress sx={{ mb: 2 }} />}
           {['readonly', 'recovery', 'unavailable'].includes(state.mode) && (

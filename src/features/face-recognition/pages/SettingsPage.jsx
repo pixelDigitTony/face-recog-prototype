@@ -53,12 +53,10 @@ export function SettingsPage() {
                   setError(null);
                   setSuccess(false);
                   try {
-                    if (String(data.get('threshold')).trim() === '')
-                      throw new Error('Enter a numeric threshold.');
                     await repository.commit({
                       type: 'settings',
                       settings: {
-                        matchThreshold: Number(data.get('threshold')),
+                        matchThreshold: 0.85,
                         saveThumbnails: data.has('thumbnails'),
                       },
                     });
@@ -71,12 +69,13 @@ export function SettingsPage() {
                 <Stack spacing={2}>
                   <TextField
                     name="threshold"
-                    label="Experimental cosine threshold"
+                    label="Required cosine threshold (above 85%)"
+                    disabled
                     defaultValue={settings.matchThreshold}
                     type="number"
                     required
                     slotProps={{ htmlInput: { min: -1, max: 1, step: 0.001 } }}
-                    helperText="0.363 is an example benchmark reference; calibrate with your test group."
+                    helperText="Fixed rule: raw similarity > 0.85. Historical attempts keep their original policy."
                   />
                   <FormControlLabel
                     control={<Switch name="thumbnails" defaultChecked={settings.saveThumbnails} />}

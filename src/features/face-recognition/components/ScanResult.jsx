@@ -2,6 +2,7 @@ import { Alert, Box, Button, Chip, Divider, Stack, Typography } from '@mui/mater
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useState } from 'react';
 import { RecordDetailsDialog } from '@/components/dialogs/faceRecognition/RecordDetailsDialog';
+import { formatPercentage } from '@/utils/hooks/faceRecognition/recognition/matchPolicy';
 
 export function ScanResult({ workflow }) {
   const [details, setDetails] = useState(null);
@@ -47,17 +48,17 @@ export function ScanResult({ workflow }) {
           <Stack direction="row" spacing={4}>
             <Box>
               <Typography variant="caption" color="text.secondary">
-                Similarity
+                Match similarity
               </Typography>
-              <Typography variant="h5">
-                {result.similarity === null ? '—' : result.similarity.toFixed(4)}
-              </Typography>
+              <Typography variant="h5">{formatPercentage(result.similarity)}</Typography>
             </Box>
             <Box>
               <Typography variant="caption" color="text.secondary">
                 Threshold
               </Typography>
-              <Typography variant="h5">{result.thresholdSnapshot.toFixed(4)}</Typography>
+              <Typography variant="h5">
+                {result.comparisonOperator ?? '>='} {(result.thresholdSnapshot * 100).toFixed(0)}%
+              </Typography>
             </Box>
             <Box>
               <Typography variant="caption" color="text.secondary">
@@ -90,7 +91,10 @@ export function ScanResult({ workflow }) {
             </Button>
           </Stack>
           <Typography variant="caption" color="text.secondary">
-            Liveness not checked · Prototype result
+            {result.livenessStatus === 'passed_basic'
+              ? 'Basic liveness passed — motion challenge only'
+              : 'Liveness not checked or not passed'}{' '}
+            · Prototype result
           </Typography>
         </>
       )}

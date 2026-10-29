@@ -106,6 +106,7 @@ test('a missing model reports a readiness error without inserting capture record
   );
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Add person', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Use test image', exact: true }).click();
   await page.getByRole('button', { name: 'Load models', exact: true }).click();
   await expect(page.getByText(/Missing model:/)).toBeVisible({ timeout: 30000 });
   expect(

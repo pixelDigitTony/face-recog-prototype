@@ -127,3 +127,4 @@ await writeFile(
   path.join(root, 'public/licenses/onnxruntime.txt'),
   await download('https://raw.githubusercontent.com/microsoft/onnxruntime/v1.23.2/LICENSE'),
 );
+await import('./setup-liveness.mjs');

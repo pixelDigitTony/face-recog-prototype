@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const OUTCOMES = [
   'ENROLLED',
   'MATCH',
@@ -11,9 +11,13 @@ export const OUTCOMES = [
   'CAMERA_ERROR',
   'MODEL_ERROR',
   'INFERENCE_ERROR',
+  'LIVENESS_FAILED',
+  'LIVENESS_EXPIRED',
+  'INCONCLUSIVE',
+  'DIAGNOSTIC_ONLY',
 ];
 export const defaultSettings = Object.freeze({
-  matchThreshold: 0.363,
+  matchThreshold: 0.85,
   saveThumbnails: true,
   maxPeople: 50,
   maxAttempts: 200,

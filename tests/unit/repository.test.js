@@ -167,7 +167,7 @@ describe('localStorage repository', () => {
     });
     await h.repository.commit({
       type: 'settings',
-      settings: { matchThreshold: 0.7, saveThumbnails: false },
+      settings: { matchThreshold: 0.85, saveThumbnails: false },
     });
     expect(h.repository.getSnapshot().database.attempts[0].thresholdSnapshot).toBe(0.363);
     await expect(

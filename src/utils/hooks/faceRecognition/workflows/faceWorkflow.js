@@ -1,4 +1,5 @@
 import { cosineSimilarity } from '../recognition/cosineSimilarity';
+import { percentage, LIVE_POLICY, SCORE_MAPPING } from '../recognition/matchPolicy';
 
 export function compatibleTemplate(template, manifest) {
   return Boolean(
@@ -31,7 +32,7 @@ export function createFaceWorkflow({ repository, engine, context }) {
       };
     }
   }
-  async function run(purpose, { personId, capture, signal }) {
+  async function run(purpose, { personId, capture, signal, prepared }) {
     if (busy) throw new Error('A capture is already processing.');
     busy = true;
     try {
@@ -46,7 +47,13 @@ export function createFaceWorkflow({ repository, engine, context }) {
       let extracted = {},
         outcome,
         capturedAt = null;
-      if (purpose === 'verify' && !template) outcome = 'NOT_ENROLLED';
+      if (prepared) {
+        extracted = prepared.extracted || {};
+        capturedAt = new Date().toISOString();
+        outcome = prepared.outcome;
+        if (person.activeTemplateId !== prepared.expectedTemplateId)
+          throw new Error('Enrollment changed. Start again.');
+      } else if (purpose === 'verify' && !template) outcome = 'NOT_ENROLLED';
       else if (purpose === 'verify' && !compatibleTemplate(template, engine.manifest))
         outcome = 'MODEL_MISMATCH';
       else {
@@ -80,10 +87,14 @@ export function createFaceWorkflow({ repository, engine, context }) {
         else {
           const start = performance.now();
           similarity = cosineSimilarity(extracted.embedding, template.embedding);
-          outcome = similarity >= settings.matchThreshold ? 'MATCH' : 'NO_MATCH';
+          outcome = 'DIAGNOSTIC_ONLY';
           extracted.timingsMs.comparison = performance.now() - start;
         }
       }
+      if (prepared) {
+        outcome = prepared.outcome;
+        similarity = prepared.similarity ?? similarity;
+      } else if (extracted.embedding) outcome = 'DIAGNOSTIC_ONLY';
       const attempt = {
         id: crypto.randomUUID(),
         purpose,
@@ -99,7 +110,6 @@ export function createFaceWorkflow({ repository, engine, context }) {
         outcome,
         reasonCode: extracted.reasonCode ?? null,
         similarity,
-        thresholdSnapshot: settings.matchThreshold,
         modelIdentity: extracted.modelIdentity ?? engine.manifest ?? null,
         preprocessingVersion: extracted.preprocessingVersion ?? null,
         qualityPolicyVersion: extracted.qualityPolicyVersion ?? null,
@@ -107,14 +117,25 @@ export function createFaceWorkflow({ repository, engine, context }) {
         timingsMs: extracted.timingsMs ?? {},
         probeEmbedding: extracted.embedding ?? null,
         thumbnailDataUrl: extracted.thumbnailDataUrl ?? null,
-        livenessStatus: 'not_implemented',
+        livenessStatus: prepared?.liveness?.status ?? 'not_checked',
+        ...prepared?.metadata,
+        sessionId: prepared?.sessionId ?? crypto.randomUUID(),
+        source: prepared ? 'live_camera' : 'test_image',
+        authoritative: false,
+        scoreMappingVersion: SCORE_MAPPING,
+        decisionPolicyVersion: LIVE_POLICY,
+        matchPercentage: percentage(similarity),
+        percentageThresholdSnapshot: 85,
+        comparisonOperator: '>',
+        thresholdSnapshot: 0.85,
+        liveness: prepared?.liveness ?? null,
       };
       const operation = {
         type: 'saveAttempt',
         attempt,
         expectedTemplateId: person.activeTemplateId,
       };
-      if (outcome === 'ENROLLED') {
+      if (outcome === 'ENROLLED' || (!prepared && purpose === 'enroll' && extracted.embedding)) {
         const newTemplate = {
           id: crypto.randomUUID(),
           personId,
@@ -128,12 +149,15 @@ export function createFaceWorkflow({ repository, engine, context }) {
           quality: extracted.quality,
           thumbnailDataUrl: extracted.thumbnailDataUrl ?? null,
           createdAt: attempt.completedAt,
+          enrollmentSource: prepared ? 'live_camera' : 'test_image',
+          enrollmentLiveness: prepared?.liveness?.status ?? 'not_checked',
         };
         attempt.templateId = newTemplate.id;
         attempt.templateVersion = newTemplate.version;
         operation.type = 'saveEnrollment';
         operation.template = newTemplate;
       }
+      operation.signal = signal;
       return await save(operation);
     } finally {
       busy = false;
@@ -142,10 +166,11 @@ export function createFaceWorkflow({ repository, engine, context }) {
   return {
     enroll: (request) => run('enroll', request),
     verify: (request) => run('verify', request),
+    savePrepared: (purpose, request) => run(purpose, request),
     retrySave: async (id) => {
       const operation = pending.get(id);
       if (!operation) throw new Error('This pending result is no longer available.');
-      return save(operation);
+      return save({ ...operation, signal: undefined });
     },
     discard: (id) => pending.delete(id),
     deletePersonData: ({ personId }) => repository.commit({ type: 'deletePerson', id: personId }),

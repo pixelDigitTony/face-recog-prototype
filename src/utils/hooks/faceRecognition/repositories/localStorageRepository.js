@@ -1,5 +1,6 @@
 import { createDatabase, validateDatabase, fail } from './databaseSchema';
 import { acquireWriterLock } from './writerLock';
+import { migrateDatabase } from './migrateDatabase';
 
 export function createLocalStorageRepository({
   context,
@@ -20,8 +21,13 @@ export function createLocalStorageRepository({
   function read() {
     const raw = storage.getItem(key);
     try {
+      const original = raw === null ? null : JSON.parse(raw);
       const database =
-        raw === null ? createDatabase(context) : validateDatabase(JSON.parse(raw), context);
+        original === null ? createDatabase(context) : migrateDatabase(original, context);
+      if (original?.schemaVersion === 1 && writer?.writable) {
+        persist(database);
+        return;
+      }
       publish({
         database,
         raw,
@@ -88,6 +94,7 @@ export function createLocalStorageRepository({
     commit: (operation) =>
       schedule(async () => {
         await api.load();
+        if (operation.signal?.aborted) throw new DOMException('Session cancelled.', 'AbortError');
         if (!writer?.writable || state.mode === 'recovery' || state.mode === 'unavailable')
           fail(state.error || 'Database is read-only.', 'READ_ONLY');
         const raw = storage.getItem(key);
@@ -95,6 +102,11 @@ export function createLocalStorageRepository({
           raw === null ? createDatabase(context) : validateDatabase(JSON.parse(raw), context);
         const now = new Date().toISOString();
         if (operation.attempt) {
+          if (
+            ['MATCH', 'ENROLLED'].includes(operation.attempt.outcome) &&
+            operation.attempt.decisionPolicyVersion !== 'live-85-strict-v1'
+          )
+            fail('New live results require current liveness and similarity policy.');
           const existing = db.attempts.find((a) => a.id === operation.attempt.id);
           if (existing) {
             if (JSON.stringify(existing) !== JSON.stringify(operation.attempt))
@@ -149,6 +161,8 @@ export function createLocalStorageRepository({
             db.attempts = db.attempts.filter((a) => a.personId !== operation.id);
             break;
           case 'settings':
+            if (operation.settings.matchThreshold !== 0.85)
+              fail('Live matching requires strictly above 85%.');
             db.settings = {
               ...db.settings,
               matchThreshold: operation.settings.matchThreshold,
@@ -160,6 +174,7 @@ export function createLocalStorageRepository({
         }
         db.revision++;
         db.updatedAt = now;
+        if (operation.signal?.aborted) throw new DOMException('Session cancelled.', 'AbortError');
         return persist(db);
       }),
     exportJson: async () =>

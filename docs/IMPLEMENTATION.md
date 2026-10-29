@@ -1,5 +1,26 @@
 # Implementation and validation record
 
+## Live tracking extension — 2026-10-29
+
+Implemented the [live extension](STK_LIVE_FACE_TRACKING_SPEC.md) in the renamed `face-recog-prototype/` project. Enrollment and verification now start an explicit camera session. YuNet returns every post-NMS box/confidence/quality result; the UI mirrors and scales overlays and exposes an accessible detected-face list. Temporary geometric track IDs do not identify additional people. Multiple, missing, poor-quality or ambiguous faces revoke pending liveness and matching evidence.
+
+The session coordinator runs one frame pipeline at a time, targets at most 8 detection samples/second and 3 identity comparisons/second, and skips intermediate frames. MediaPipe Face Landmarker 1.2.0 runs in a separate classic worker with CPU WASM and locally served, hash-verified model/runtime assets. A neutral baseline and cryptographically randomized left/right turns plus returns establish **basic motion liveness**. Tracking interruption, stale evidence, wrong/incomplete motions and timeouts cannot pass. A pre/post frontal embedding continuity check also revokes the challenge on a dissimilar face. Physical left/right prompt interpretation and target-camera usability still require device acceptance.
+
+Live matching requires three consecutive fresh raw cosine scores **strictly greater than 0.85**, spanning at least 600 ms, and unexpired liveness for the same session/person/template/track. The minimum accepted score is retained. Matching exactly 85% fails. Percentage is a direct positive-cosine display conversion, not identity probability. Enrollment requires an explicit capture action after basic liveness and revalidates the next frame. Test images produce diagnostic-only results/templates, excluded from live verification.
+
+One immutable terminal attempt is committed per session. Boxes continue after a terminal result; the result card is labelled as the last completed attempt. Explicit rearm starts another challenge. Storage failures remain unsaved and retry the same ID/evidence. Schema 1 migrates atomically to schema 2 under the existing writer lock/key, preserving historical outcomes and threshold snapshots. Migration failure keeps original bytes available for export. New columns expose percentage, source, liveness, face count and policy; JSON details/export expose the bounded challenge summary. Per-frame images, tracking histories and bystander embeddings are not stored.
+
+Validation for the extension:
+
+- **41 unit tests**: existing persistence/math/workflow coverage plus strict boundary/rounding semantics, stable score windows, randomized challenge completion/expiry/timing, wrong/stale motions, track ambiguity, migration preservation/failure, repository evidence validation, no high-score bypass, one terminal write and session cancellation. Complete passing session orchestration uses synthetic pose observations; this does not prove physical anti-spoofing.
+- **11 desktop Chrome tests** in the development suite: real MediaPipe bundle loading and finite pose evidence, real YuNet/SFace/native parity, two-face streamed fixture with both rendered boxes and zero frame records, camera enrollment model readiness, missing liveness assets, responsive layout, media-track release, diagnostic enrollment/comparison, quota retry, reload, writer coordination and corruption recovery.
+- Production build passed; static-preview Chrome suite: **8 passed, 3 intentionally skipped**. The omitted cases use development-only source imports/fixture endpoints; the remaining camera/model/error/storage/UI cases exercise bundled assets.
+- PlantUML syntax check succeeds for the updated seven-diagram file; original capture diagrams are retained as baseline, with live sequence and state diagrams added. Desktop and mobile screenshots were inspected in `.local/`.
+
+Remaining acceptance: physical webcams, Android/iPhone/Safari, accessibility with assistive technology, genuine/impostor calibration at 0.85, sustained 10-minute target-device performance/memory measurements, and photo/screen/replay/mask/virtual-camera attack evaluation. The model fixture tests demonstrate operation and parity, not population accuracy or validated PAD. No deployment, STK attendance integration or production biometric authority is claimed. The existing Vite chunk-size advisory remains nonfatal.
+
+The sections below record the original 2026-10-28 implementation and its evidence; the extension above supersedes their manual-only behavior and `not_implemented` liveness description.
+
 Implemented on 2026-10-28 in `facial-recog-prototype/`.
 
 ## Delivered behavior

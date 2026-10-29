@@ -7,7 +7,7 @@ A standalone React JavaScript + MUI prototype for browser-local YuNet/SFace face
 Use Node.js 20.20+ or a current supported LTS release, and npm. Dependencies and verified model assets are already present in this working copy.
 
 ```powershell
-cd C:\Users\USER\projects\Starwinner\facial-recog-prototype
+cd C:\Users\USER\projects\Starwinner\face-recog-prototype
 npm.cmd run dev
 ```
 
@@ -24,12 +24,12 @@ npm.cmd run dev
 ## Try it
 
 1. On **Enroll**, click **+**, enter an employee code and name, acknowledge browser storage, and save the person.
-2. Click **Load models**. Once ready, start the camera and click **Capture & enroll**. Keep one face visible in even lighting.
-3. On **Scan face**, select that enrolled person, start the camera and click **Scan face**.
+2. Click **Start live scan**. Keep one face visible, look straight ahead, then follow the randomized left/right head-turn and return prompts. After basic liveness passes, click **Capture & enroll** (or explicitly replace an enrollment).
+3. On **Scan face**, select that enrolled person and **Start live scan**. All detected faces receive boxes, temporary track IDs and detection details. Verification pauses whenever more than one face appears. After basic liveness, three fresh consecutive comparisons **strictly above 85%** produce a match. Exactly 85% fails. **Start next verification** rearms a new session; staying in frame does not create repeated rows.
 4. Open **Local database** to inspect People, Templates, Captures, and Settings/Metadata. Each **View** dialog exposes the full stored record, including numeric face embeddings.
-5. Use **Settings** to change the experimental threshold or thumbnail retention. **Export JSON** includes the entire database. Deletion and reset always require an explicit action.
+5. Use **Settings** to change thumbnail retention. The required threshold is fixed at raw cosine > 0.85. **Export JSON** includes the entire database. Deletion and reset always require an explicit action.
 
-**Use test image** is an additional manual input for reproducible testing without a webcam. It still runs the real models and is labelled as image test mode. Fixtures under `tests/fixtures/` are never automatically enrolled or seeded into localStorage.
+**Use test image** opens the diagnostic capture flow. It runs the real models, displays similarity and saves diagnostic records, but cannot complete liveness or produce a live match. Image-created templates are excluded from live verification. Fixtures under `tests/fixtures/` are never automatically seeded into localStorage.
 
 Camera access needs localhost or HTTPS. Model loading is explicit and may take longer on the first visit. Ready sessions can run inference without network access; a cold offline reload is outside the MVP. Clearing browser data, changing origin/port, or using another profile creates a different local database.
 
@@ -41,7 +41,9 @@ Limits are 50 people, 200 capture attempts, and a conservative 3 MiB estimated s
 
 Retained thumbnails are at most 96 × 96 JPEG and 4,096 characters. Embeddings contain 128 normalized numeric values. Full video and source frames are not retained. Corrupt or unsupported data is preserved for download; recovery never silently resets the database. Reset touches only the prototype's scoped key.
 
-This is a local test database accessible to scripts running on the same origin. The displayed match is non-authoritative, and liveness is not implemented. Test with appropriate sample data; production access control, biometric protection, retention and attendance authorization belong to the later STK integration.
+Schema 1 migrates atomically to schema 2 under the existing writer lock and key. Historical scores, outcomes and threshold snapshots remain unchanged; old templates show that enrollment liveness was not checked. Export before upgrading when you need a backup. Failed migration preserves original data for recovery.
+
+This is a local test database accessible to scripts on the same origin. Results remain non-authoritative. MediaPipe landmarks support a **basic randomized motion challenge**, not validated passive anti-spoofing. Photo/video replay, masks and virtual-camera injection remain unvalidated. Similarity percentage is a raw score conversion, not identity probability; 0.85 is much stricter than the former experimental 0.363 threshold. Target-user/camera calibration and production STK authorization remain separate acceptance work.
 
 ## Architecture and STK integration
 
@@ -72,9 +74,11 @@ import { FaceRecognitionModule, EnrollmentPage } from './features/face-recogniti
 
 Later, replace `FaceWorkflow` with an STK API adapter for server-authoritative enrollment/verification, replace local queries with scoped API queries, and supply actual company/store/employee identity from STK. Keep the raw database viewer prototype-only. Production attendance must use a server-issued decision tied to employee, scope and action; it must not trust a browser score.
 
-The implementation uses one `faceWorkflow.js` module to keep the small enrollment/verification/commit workflow together rather than introducing forwarding-only modules. Schema v1 intentionally rejects unknown versions instead of attempting an untested migration. See the [specification](docs/STK_FACE_RECOGNITION_PROTOTYPE_SPEC.md), [UML](docs/STK_FACE_RECOGNITION_PROTOTYPE_UML.puml), and [validation record](docs/IMPLEMENTATION.md).
+`liveFaceWorkflow.js` coordinates transient tracking, challenge evidence and session decisions; `faceWorkflow.js` prepares terminal enrollment/verification operations and immutable retry data. Schema v2 migrates the known v1 format and rejects unknown versions without resetting data. See the [live specification](docs/STK_LIVE_FACE_TRACKING_SPEC.md), [UML](docs/STK_FACE_RECOGNITION_PROTOTYPE_UML.puml), and [validation record](docs/IMPLEMENTATION.md).
 
 ## Validation
+
+The [live tracking specification](docs/STK_LIVE_FACE_TRACKING_SPEC.md) covers multi-face overlays, the matching percentage, basic liveness and session persistence. See [implementation evidence](docs/IMPLEMENTATION.md) for verified behavior and remaining physical-device acceptance.
 
 ```powershell
 npm.cmd test
@@ -103,4 +107,4 @@ The included `vercel.json` rewrites page requests to `index.html` so React Route
 
 Exact model provenance and hashes are in `asset-lock.json`; input/output conventions and quality gates are in `public/models/model-manifest.json`. The detector uses its declared **640 × 640** input and BGR 0–255 planes. Five-point alignment produces a **112 × 112** RGB SFace input without unrelated pixel normalization. The OpenCV.js UMD wrapper has a documented `globalThis` adaptation for module workers in `setup-assets.mjs`; the underlying package is pinned.
 
-The default cosine threshold of 0.363 and the image-quality cutoffs are experimental, not calibrated for STK. A model/hash/preprocessing change requires compatible enrollment or re-enrollment. Review the exact code/model notices in `public/licenses/` before redistribution. Test images are upstream OpenCV sample fixtures, used for development only; they are excluded from the static production build.
+The live cosine cutoff is strictly greater than 0.85, as requested; it is not calibrated for STK. Historical attempts preserve their prior threshold. The MediaPipe 1.2.0 package, Face Landmarker bundle revision 1 and local runtime hashes are recorded in `public/models/liveness-manifest.json`. `setup:assets` also prepares these assets; `node scripts/setup-liveness.mjs` prepares them independently. A model/hash/preprocessing change requires compatible enrollment or re-enrollment. Review code/model notices in `public/licenses/` before redistribution. Development fixtures are excluded from the production build.

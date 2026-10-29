@@ -1,4 +1,4 @@
-import { CaptureWorkspace } from '../components/CaptureWorkspace';
+import { LiveScanWorkspace } from '../components/LiveScanWorkspace';
 export function EnrollmentPage() {
-  return <CaptureWorkspace purpose="enroll" />;
+  return <LiveScanWorkspace purpose="enroll" />;
 }

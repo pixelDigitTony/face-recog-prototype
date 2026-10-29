@@ -19,6 +19,7 @@ import { useFaceServices, useLocalDatabase } from '@/utils/hooks/faceRecognition
 import { formatDate, filterAndSortRecords } from '@/utils/hooks/faceRecognition/tableFormatting';
 import { downloadJson } from '@/utils/hooks/faceRecognition/downloadJson';
 import { OUTCOMES } from '../constants';
+import { formatPercentage } from '@/utils/hooks/faceRecognition/recognition/matchPolicy';
 import { LocalDatabaseTable } from '../components/LocalDatabaseTable';
 import { RecordDetailsDialog } from '@/components/dialogs/faceRecognition/RecordDetailsDialog';
 import { DeleteDataDialog } from '@/components/dialogs/faceRecognition/DeleteDataDialog';
@@ -118,9 +119,13 @@ export function DatabasePage() {
               },
               {
                 key: 'similarity',
-                label: 'Score',
-                render: (row) => row.similarity?.toFixed(4) ?? '—',
+                label: 'Match similarity',
+                render: (row) => formatPercentage(row.similarity),
               },
+              { key: 'livenessStatus', label: 'Liveness' },
+              { key: 'source', label: 'Source' },
+              { key: 'faceCountAtDecision', label: 'Face count' },
+              { key: 'decisionPolicyVersion', label: 'Policy' },
               {
                 key: 'thresholdSnapshot',
                 label: 'Threshold',

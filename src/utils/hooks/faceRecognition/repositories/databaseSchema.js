@@ -1,9 +1,10 @@
 import { defaultSettings, OUTCOMES } from '@/features/face-recognition/constants';
+import { percentage, LIVE_POLICY } from '../recognition/matchPolicy';
 
 export function createDatabase(scope) {
   const now = new Date().toISOString();
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     databaseId: crypto.randomUUID(),
     revision: 0,
     createdAt: now,
@@ -24,8 +25,8 @@ export function validateEmbedding(value) {
   const norm = Math.hypot(...value);
   if (Math.abs(norm - 1) > 0.005) fail('Embedding must be normalized.');
 }
-export function validateDatabase(db, scope) {
-  if (!db || db.schemaVersion !== 1)
+export function validateDatabase(db, scope, legacy = false) {
+  if (!db || db.schemaVersion !== (legacy ? 1 : 2))
     fail(
       'Unsupported database schema. Export the original data or reset this prototype.',
       'SCHEMA_ERROR',
@@ -37,6 +38,8 @@ export function validateDatabase(db, scope) {
   for (const key of ['createdAt', 'updatedAt'])
     if (!Number.isFinite(Date.parse(db[key]))) fail('Invalid database timestamp.');
   const settings = db.settings;
+  if (!legacy && settings?.matchThreshold !== 0.85)
+    fail('Live matching requires strictly above 85%.');
   if (
     !settings ||
     !Number.isFinite(settings.matchThreshold) ||
@@ -104,7 +107,15 @@ export function validateDatabase(db, scope) {
       !people.has(attempt.personId) ||
       !OUTCOMES.includes(attempt.outcome) ||
       !['enroll', 'verify'].includes(attempt.purpose) ||
-      attempt.livenessStatus !== 'not_implemented' ||
+      ![
+        'not_implemented',
+        'not_checked',
+        'checking',
+        'passed_basic',
+        'failed',
+        'expired',
+        'unavailable',
+      ].includes(attempt.livenessStatus) ||
       !attempt.personSnapshot?.displayName ||
       !Number.isFinite(Date.parse(attempt.startedAt)) ||
       !Number.isFinite(Date.parse(attempt.completedAt))
@@ -118,6 +129,64 @@ export function validateDatabase(db, scope) {
       fail('Invalid similarity.');
     if (!Number.isFinite(attempt.thresholdSnapshot) || Math.abs(attempt.thresholdSnapshot) > 1)
       fail('Invalid threshold snapshot.');
+    if (attempt.decisionPolicyVersion === LIVE_POLICY) {
+      if (['MATCH', 'ENROLLED'].includes(attempt.outcome)) {
+        const live = attempt.liveness;
+        if (
+          attempt.source !== 'live_camera' ||
+          attempt.faceCountAtDecision !== 1 ||
+          attempt.livenessStatus !== 'passed_basic' ||
+          !live?.challengeId ||
+          live.steps?.length !== 4 ||
+          !live.steps.every((s) => Number.isFinite(s.completedAt)) ||
+          !Number.isFinite(live.passedAt) ||
+          !Number.isFinite(live.expiresAt) ||
+          !Number.isFinite(attempt.decisionTimestamp) ||
+          attempt.decisionTimestamp > live.expiresAt ||
+          attempt.decisionTimestamp < live.passedAt ||
+          live.expiresAt - live.passedAt > 5000
+        )
+          fail('Live match/enrollment evidence is incomplete.');
+      }
+      if (
+        attempt.authoritative !== false ||
+        attempt.thresholdSnapshot !== 0.85 ||
+        attempt.comparisonOperator !== '>' ||
+        attempt.percentageThresholdSnapshot !== 85 ||
+        attempt.matchPercentage !== percentage(attempt.similarity)
+      )
+        fail('Invalid live decision policy.');
+      if (
+        attempt.outcome === 'MATCH' &&
+        (attempt.source !== 'live_camera' ||
+          attempt.faceCountAtDecision !== 1 ||
+          attempt.livenessStatus !== 'passed_basic' ||
+          attempt.similarity <= 0.85 ||
+          attempt.stableSampleCount !== 3 ||
+          attempt.stableDurationMs < 600 ||
+          attempt.scoreAggregation !== 'minimum' ||
+          !attempt.liveness?.challengeId ||
+          attempt.liveness.steps?.length !== 4 ||
+          !attempt.liveness.steps.every((s) => Number.isFinite(s.completedAt)) ||
+          !Number.isFinite(attempt.liveness.expiresAt) ||
+          attempt.decisionTimestamp > attempt.liveness.expiresAt ||
+          attempt.decisionTimestamp < attempt.liveness.passedAt)
+      )
+        fail('Live match evidence is incomplete.');
+      if (
+        attempt.source === 'test_image' &&
+        (['MATCH', 'NO_MATCH', 'ENROLLED'].includes(attempt.outcome) ||
+          attempt.livenessStatus !== 'not_checked')
+      )
+        fail('Images are diagnostic only.');
+      if (
+        attempt.outcome === 'ENROLLED' &&
+        (attempt.source !== 'live_camera' ||
+          attempt.livenessStatus !== 'passed_basic' ||
+          attempt.decisionTimestamp > attempt.liveness.expiresAt)
+      )
+        fail('Enrollment requires fresh basic liveness.');
+    }
   }
   return db;
 }

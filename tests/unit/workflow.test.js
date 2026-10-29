@@ -62,11 +62,12 @@ describe('face workflow', () => {
   it('atomically enrolls and verifies a single selected person', async () => {
     const h = await setup();
     const enrolled = await h.workflow.enroll({ personId: 'person', capture: h.capture });
-    expect(enrolled.outcome).toBe('ENROLLED');
+    expect(enrolled.outcome).toBe('DIAGNOSTIC_ONLY');
     expect(enrolled.authoritative).toBe(false);
     expect(h.repository.getSnapshot().database.templates).toHaveLength(1);
     const match = await h.workflow.verify({ personId: 'person', capture: h.capture });
-    expect(match.outcome).toBe('MATCH');
+    expect(match.outcome).toBe('DIAGNOSTIC_ONLY');
+    expect(match.livenessStatus).toBe('not_checked');
     expect(match.persisted).toBe(true);
   });
   it('keeps a previous enrollment intact after failed replacement and retries without inference', async () => {
@@ -96,9 +97,9 @@ describe('face workflow', () => {
       timingsMs: {},
     }));
     const result = await h.workflow.verify({ personId: 'person', capture: h.capture });
-    expect(result.outcome).toBe('NO_MATCH');
+    expect(result.outcome).toBe('DIAGNOSTIC_ONLY');
     expect(result.probeEmbedding).toHaveLength(128);
-    expect(result.thresholdSnapshot).toBe(0.363);
+    expect(result.thresholdSnapshot).toBe(0.85);
   });
   it('records camera errors and rejects incompatible templates without inference', async () => {
     const h = await setup();

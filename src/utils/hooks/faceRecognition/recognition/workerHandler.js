@@ -11,7 +11,7 @@ export async function handleWorkerRequest({ type, payload }) {
     return { ...models.manifest, recognizerOutputs: models.recognizerOutputs };
   }
   if (!models) throw new Error('Models are not initialized.');
-  if (type !== 'extract') throw new Error('Unknown worker operation.');
+  if (!['extract', 'analyzeFrame'].includes(type)) throw new Error('Unknown worker operation.');
   const { cv, ort, manifest, detector, recognizer } = models;
   const frame = payload.frame,
     start = performance.now(),
@@ -35,6 +35,10 @@ export async function handleWorkerRequest({ type, payload }) {
       preprocessingVersion: manifest.preprocessingVersion,
       qualityPolicyVersion: manifest.qualityPolicyVersion,
       quality: { faceCount: faces.length },
+      faces: faces.map((face) => {
+        const quality = assessQuality(cv, source, face, manifest.qualityPolicy);
+        return { ...face, quality: quality.metrics, reasonCode: quality.reasonCode };
+      }),
       timingsMs,
       embedding: null,
       outcome: faces.length === 0 ? 'NO_FACE' : faces.length > 1 ? 'MULTIPLE_FACES' : null,
@@ -45,7 +49,7 @@ export async function handleWorkerRequest({ type, payload }) {
       if (quality.reasonCode) {
         result.outcome = 'LOW_QUALITY';
         result.reasonCode = quality.reasonCode;
-      } else {
+      } else if (payload.includeEmbedding !== false) {
         const alignStart = performance.now();
         crop = alignFace(cv, source, faces[0].landmarks);
         timingsMs.alignment = performance.now() - alignStart;

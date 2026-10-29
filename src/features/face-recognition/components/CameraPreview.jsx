@@ -1,7 +1,7 @@
 import { Box, Button, Chip, Stack, Typography } from '@mui/material';
 import VideocamOutlinedIcon from '@mui/icons-material/VideocamOutlined';
 
-export function CameraPreview({ camera, imageUrl, onImage, disabled }) {
+export function CameraPreview({ camera, imageUrl, onImage, disabled, imageOnly = false }) {
   return (
     <>
       <Box
@@ -68,14 +68,16 @@ export function CameraPreview({ camera, imageUrl, onImage, disabled }) {
         />
       </Box>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 1.5 }}>
-        <Button
-          size="small"
-          startIcon={<VideocamOutlinedIcon />}
-          disabled={disabled || camera.starting}
-          onClick={camera.active ? camera.stop : camera.start}
-        >
-          {camera.active ? 'Stop camera' : camera.starting ? 'Opening…' : 'Start camera'}
-        </Button>
+        {!imageOnly && (
+          <Button
+            size="small"
+            startIcon={<VideocamOutlinedIcon />}
+            disabled={disabled || camera.starting}
+            onClick={camera.active ? camera.stop : camera.start}
+          >
+            {camera.active ? 'Stop camera' : camera.starting ? 'Opening…' : 'Start camera'}
+          </Button>
+        )}
         <Button size="small" component="label" disabled={disabled}>
           Use test image
           <input

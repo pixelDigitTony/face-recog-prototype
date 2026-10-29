@@ -1,6 +1,6 @@
 ' Implemented frontend prototype; acceptance evidence: IMPLEMENTATION.md.
 ' Companion: STK_FACE_RECOGNITION_PROTOTYPE_SPEC.md
-' Five named diagrams in one editable PlantUML source file.
+' Seven named diagrams: original capture baseline plus implemented live sequence/state.
 
 @startuml stk_face_prototype_components
 title STK face prototype - frontend component boundaries
@@ -25,6 +25,9 @@ node "Browser - prototype origin" as Browser {
   component "FaceEngine" as EnginePort <<interface>>
   component "BrowserFaceEngine\nworker client" as Engine
   component "Camera hook\ngetUserMedia and Canvas" as Camera
+  component "LiveFaceWorkflow\nsession / tracking / >85% gate" as Live
+  component "Frame scheduler\none pipeline in flight" as Scheduler
+  component "Liveness worker\nMediaPipe Face Landmarker" as Liveness
   node "Dedicated Web Worker" as Worker {
     component "Model loader and image adapters" as Adapters
     component "OpenCV.js\npreprocessing and alignment" as CV
@@ -39,6 +42,11 @@ WorkflowPort <|.. Workflow
 Feature --> RepositoryPort : query / subscribe / export
 Feature --> Camera : explicit camera controls
 Camera --> Workflow : captured frame
+Camera --> Scheduler : sampled frame
+Scheduler --> Live : analyze, never queue video
+Live --> Engine : all boxes / optional embedding
+Live --> Liveness : single face pose evidence
+Live --> Workflow : one prepared terminal attempt
 Workflow --> RepositoryPort : scoped operations
 RepositoryPort <|.. Repository
 Repository --> Writer : require writer ownership
@@ -130,7 +138,13 @@ class CaptureAttempt {
   quality / timingsMs : available measurements
   probeEmbedding : number[128] or null
   thumbnailDataUrl : string or null
-  livenessStatus = not_implemented
+  matchPercentage : number or null
+  comparisonOperator : > for new live policy
+  decisionPolicyVersion : live-85-strict-v1 or legacy
+  source : live_camera | test_image | legacy_unknown
+  livenessStatus : passed_basic | failed | expired | not_checked
+  liveness : bounded challenge summary
+  sessionId / trackId : temporary tracking scope
 }
 
 class ModelIdentity {
@@ -277,7 +291,7 @@ else compatible enrollment
   Engine --> Flow : embedding + measurements OR rejection/error
   alt usable embedding
     Flow -> Flow : cosine similarity against selected template only
-    Flow -> Flow : MATCH if score >= threshold; otherwise NO_MATCH
+    Flow -> Flow : Diagnostic similarity only; image cannot pass liveness
   else camera, quality or inference failure
     Flow -> Flow : assign explicit failure outcome
   end
@@ -317,8 +331,83 @@ opt tester retries an unsaved result
 end
 
 note over UI, Table
-  Result is non-authoritative; liveness is not implemented.
+  Result is non-authoritative. Diagnostic images cannot pass liveness.
   No attendance API is called.
+end note
+@enduml
+
+@startuml stk_live_face_sequence
+title Live 1:1 verification with multi-face overlays and basic liveness
+skinparam shadowing false
+actor Tester
+participant "React / MUI" as UI
+participant "Live workflow" as Live
+participant "YuNet / SFace worker" as Recognition
+participant "MediaPipe worker" as Pose
+participant "ActiveChallenge" as Challenge
+database "localStorage v2" as DB
+Tester -> UI : select person; Start live scan
+UI -> Live : freeze person / template / session
+loop one sampled pipeline at a time
+  UI -> Live : fresh frame + monotonic timestamp
+  Live -> Recognition : detect all faces; optional embedding
+  Recognition --> Live : every box + confidence + quality
+  Live --> UI : temporary track IDs and all face details
+  alt multiple or missing / ambiguous face
+    Live -> Challenge : reset and revoke progress
+    Live --> UI : verification paused; no per-frame writes
+  else exactly one usable continuous face
+    Live -> Pose : same frame
+    Pose --> Live : yaw + cross-check box
+    Live -> Challenge : fresh timestamp + pose
+    Challenge --> Live : random prompts / basic pass / failure
+    Live --> UI : prompt and similarity, when available
+    opt basic pass valid and three raw scores > 0.85 over >=600ms
+      Live -> DB : atomic terminal attempt, fixed policy, evidence
+      DB --> Live : saved or unsaved
+      Live --> UI : last completed attempt + truthful save state
+    end
+  end
+end
+note over Live, DB
+  Exactly 85% fails. Image input is diagnostic only.
+  Active motion is not validated passive anti-spoofing.
+  One terminal row per session; explicit next attempt.
+end note
+@enduml
+
+@startuml stk_live_face_states
+title Live face session states
+skinparam shadowing false
+[*] --> Idle
+Idle --> Loading : explicit Start
+Loading --> Tracking : local models ready + camera
+Loading --> Error : missing assets / camera / read-only
+Tracking --> Challenging : one selected eligible face; neutral baseline
+Tracking --> Blocked : multiple / missing / quality / ambiguity
+Challenging --> Blocked : continuity lost; revoke challenge
+Blocked --> Challenging : reacquire; new randomized challenge
+Challenging --> Comparing : both turns and returns completed
+Challenging --> Saving : terminal timeout/failure
+Comparing --> Saving : stable match/no match or expired evidence
+Comparing --> Blocked : multiple faces / tracking lost
+Comparing --> EnrollmentReady : enrollment purpose + fresh pass
+EnrollmentReady --> Saving : explicit capture; next frame revalidates
+Saving --> Completed : atomic commit success
+Saving --> Unsaved : persistence failed
+Unsaved --> Saving : same attempt ID; no repeated inference
+Unsaved --> Completed : explicit discard
+Completed --> Tracking : explicit next verification; new session
+Tracking --> Stopped : stop / hide / navigation
+Blocked --> Stopped : stop / hide / navigation
+Challenging --> Stopped : stop / hide / navigation
+Comparing --> Stopped : stop / hide / navigation
+Stopped --> Loading : explicit restart
+Error --> Loading : explicit retry
+note right of Completed
+  Detection boxes continue to update.
+  Last completed result is separate from current face.
+  Never save every frame or repeat the same session.
 end note
 @enduml
 
