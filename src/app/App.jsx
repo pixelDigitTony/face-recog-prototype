@@ -21,6 +21,7 @@ import { useFaceServices, useLocalDatabase } from '@/utils/hooks/faceRecognition
 import { StorageUsage } from '@/features/face-recognition/components/StorageUsage';
 import { downloadJson } from '@/utils/hooks/faceRecognition/downloadJson';
 import { AppRoutes } from './router';
+import { appName } from './config';
 
 const links = [
   ['/enroll', 'Enroll', PersonAddAltOutlinedIcon],
@@ -56,11 +57,8 @@ export function App() {
             <FingerprintIcon />
           </Box>
           <Box>
-            <Typography fontWeight={750} fontSize={20} letterSpacing="-.5px">
-              STK{' '}
-              <Box component="span" sx={{ fontWeight: 400 }}>
-                Face Lab
-              </Box>
+            <Typography fontWeight={750} fontSize={18} letterSpacing="-.5px">
+              {appName}
             </Typography>
             <Typography variant="caption" color="text.secondary">
               RECOGNITION PROTOTYPE
@@ -108,7 +106,7 @@ export function App() {
           <StorageUsage state={state} />
           <Divider sx={{ my: 2 }} />
           <Typography variant="caption" color="text.secondary">
-            STK · Development workspace
+            Development workspace
           </Typography>
         </Box>
       </Box>
@@ -129,7 +127,7 @@ export function App() {
         >
           <Typography variant="body2" color="text.secondary">
             <Box component="span" sx={{ fontWeight: 650, color: 'text.primary' }}>
-              Face Lab
+              {appName}
             </Box>{' '}
             &nbsp; / &nbsp; {links.find(([path]) => path === location.pathname)?.[1] ?? 'Workspace'}
           </Typography>
@@ -204,7 +202,7 @@ export function App() {
                     color="inherit"
                     size="small"
                     onClick={async () =>
-                      downloadJson(await repository.exportJson(), 'stk-face-recovery.json')
+                      downloadJson(await repository.exportJson(), 'anthonys-face-lab-recovery.json')
                     }
                   >
                     Download original

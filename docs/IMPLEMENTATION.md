@@ -1,5 +1,11 @@
 # Implementation and validation record
 
+## Anthony's Face Lab branding — 2026-10-30
+
+Renamed the desktop sidebar and shared desktop/mobile header to **Anthony's Face Lab**, using one app-name constant. Updated the browser title/description, workspace footer, normal/recovery JSON filenames, private package metadata/lockfile and README title. Removed the internal storage key from the visible database footer. Retained existing storage keys, scope identifiers and raw diagnostic/export record values for compatibility, so the branding change does not hide or orphan enrollments/history; historical integration documents keep their original references.
+
+Production build, full formatting and patch checks passed. An isolated Chrome audit checked Enroll, Scan, Database and Settings at 1440, 390 and 320 px widths (12 route/viewport checks), with no old STK branding in normal page text, no page overflow/errors, matching title/description, persisted test-person retention after reload/navigation, and both renamed download filenames. Desktop/mobile screenshots were inspected. This was a branding audit; recognition logic is unchanged. No deployment was performed.
+
 ## Face-ID churn and searching-loop correction — 2026-10-30
 
 Reproduced a self-sustaining geometry-tracker failure: a large detection-box shift created a replacement track while retaining the old box. When the next detection overlapped both, the tracker allocated another ID and retained all competing old boxes, so every following frame stayed ambiguous. The regression generated 32 different IDs after the initial overlap instead of settling, preventing the three-sample identification window from completing.

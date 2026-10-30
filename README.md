@@ -1,4 +1,4 @@
-# STK Face Lab
+# Anthony's Face Lab
 
 A standalone React JavaScript + MUI prototype for browser-local YuNet/SFace face recognition. Enrollment, verification, settings, people, templates, probe embeddings and capture history stay in localStorage. No application server or database service is required.
 

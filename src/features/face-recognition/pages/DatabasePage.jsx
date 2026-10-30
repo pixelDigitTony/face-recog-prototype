@@ -425,7 +425,7 @@ export function DatabasePage() {
         sx={{ mt: 2 }}
       >
         <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
-          Schema {db?.schemaVersion ?? '—'} · Revision {db?.revision ?? '—'} · {state.key}
+          Schema {db?.schemaVersion ?? '—'} · Revision {db?.revision ?? '—'}
         </Typography>
         {history && (
           <Button

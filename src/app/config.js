@@ -1,3 +1,5 @@
+export const appName = "Anthony's Face Lab";
+
 export const prototypeContext = Object.freeze({
   environment: 'standalone',
   companyId: 'stk-prototype',
