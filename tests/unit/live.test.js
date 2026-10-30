@@ -336,6 +336,20 @@ async function readyEnrollment() {
 }
 
 describe('live session orchestration', () => {
+  it('retains completed enrollment readiness with advisory lighting warnings', async () => {
+    const h = await readyEnrollment();
+    const warningFace = {
+      ...face,
+      quality: { lighting: { warnings: ['LOW_LIGHT', 'UNEVEN_LIGHTING'] } },
+    };
+    for (let i = 0; i < 8; i++) await h.step(0, [warningFace]);
+    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
+    expect(h.live.getSnapshot().liveness.status).toBe('passed_basic');
+    await h.live.enroll();
+    await h.step(0, [warningFace]);
+    expect(h.repo.getSnapshot().database.attempts.at(-1)?.outcome).toBe('ENROLLED');
+    h.repo.dispose();
+  });
   it('uses the challenge neutral pose consistently for the completed capture', async () => {
     const h = await liveHarness({ purpose: 'enroll' });
     await completeMotion(h, 8);

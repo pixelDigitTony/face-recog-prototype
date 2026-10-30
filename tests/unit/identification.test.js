@@ -3,6 +3,8 @@ import {
   rankEmbedding,
   createIdentificationWindow,
   classifyRanking,
+  LEGACY_IDENTIFICATION_POLICY,
+  IDENTIFICATION_POLICY,
 } from '@/utils/hooks/faceRecognition/recognition/identificationPolicy';
 import { buildEnrollmentGallery } from '@/utils/hooks/faceRecognition/recognition/enrollmentGallery';
 import {
@@ -140,11 +142,13 @@ async function harness(initial = database()) {
 }
 describe('automatic identity policy and gallery', () => {
   it.each([
-    [0.85, null, 0, 'UNKNOWN'],
+    [0.849999, null, 0, 'UNKNOWN'],
+    [0.85, null, 1, 'IDENTIFIED'],
     [0.85001, null, 1, 'IDENTIFIED'],
     [0.92, 0.87, 2, 'AMBIGUOUS'],
     [0.88, 0.84, 1, 'AMBIGUOUS'],
     [0.92, 0.7, 1, 'IDENTIFIED'],
+    [0.9, 0.85, 2, 'AMBIGUOUS'],
   ])('classifies %s and runner-up %s', (score, next, count, result) => {
     expect(classifyRanking(score, next, count)).toBe(result);
   });
@@ -198,6 +202,115 @@ describe('automatic identity policy and gallery', () => {
   });
 });
 describe('continuous identification and persistence', () => {
+  it('previews independent closest records below cutoff without persisting candidate identities', async () => {
+    const db = database();
+    db.templates[0].thumbnailDataUrl = 'data:image/jpeg;base64,YQ==';
+    const h = await harness(db);
+    h.setFaces([face(0), face(1)]);
+    const probe = (index) =>
+      vector(index).map((v, i) => v * 0.7 + (i === 3 ? Math.sqrt(1 - 0.49) : 0));
+    h.setProbes([probe(0), probe(1)]);
+    await h.step();
+    const previews = h.flow.getSnapshot().faces.map((f) => f.identification);
+    expect(previews.map((p) => p.closestCandidate.personId)).toEqual(['p0', 'p1']);
+    expect(previews[0].closestCandidate.thumbnailDataUrl).toBe(db.templates[0].thumbnailDataUrl);
+    expect(previews[1].closestCandidate.thumbnailDataUrl).toBeNull();
+    expect(previews.every((p) => p.person === null)).toBe(true);
+    for (let i = 0; i < 3; i++) await h.step();
+    expect(h.events()).toHaveLength(2);
+    for (const e of h.events()) {
+      expect(e).toMatchObject({ outcome: 'UNKNOWN', personId: null, thumbnailDataUrl: null });
+      expect(JSON.stringify(e)).not.toContain('closestCandidate');
+    }
+    h.repo.dispose();
+  });
+  it('keeps candidate photos fresh without changing the gallery or resetting stability', async () => {
+    const h = await harness();
+    await h.step();
+    const db = structuredClone(h.repo.getSnapshot().database);
+    db.templates[0].thumbnailDataUrl = 'data:image/jpeg;base64,YQ==';
+    h.storage.setItem('db', JSON.stringify(db));
+    await h.repo.refresh();
+    await h.step();
+    expect(h.flow.getSnapshot().faces[0].identification.closestCandidate.thumbnailDataUrl).toBe(
+      db.templates[0].thumbnailDataUrl,
+    );
+    await h.step();
+    expect(h.events()).toHaveLength(1);
+    expect(h.engine.setGallery).toHaveBeenCalledTimes(1);
+    h.advance(1501);
+    h.flow.stale();
+    expect(h.flow.getSnapshot().faces).toHaveLength(0);
+    h.repo.dispose();
+  });
+  it('clears a preview on quality failure, uncertain association, deletion and Stop', async () => {
+    const h = await harness();
+    await h.step();
+    expect(h.flow.getSnapshot().faces[0].identification.closestCandidate.personId).toBe('p0');
+    h.setFaces([face(0, { reasonCode: 'POOR_EXPOSURE' })]);
+    await h.step();
+    expect(h.flow.getSnapshot().faces[0].identification.closestCandidate).toBeNull();
+    h.setFaces([face(0)]);
+    await h.step();
+    await h.repo.commit({ type: 'deletePerson', id: 'p0' });
+    await h.step();
+    expect(h.flow.getSnapshot().faces[0].identification.closestCandidate?.personId).not.toBe('p0');
+    h.flow.stop();
+    expect(h.flow.getSnapshot().faces).toHaveLength(0);
+    h.repo.dispose();
+  });
+  it('validates exact-85 inclusive decisions and loads mixed strict/inclusive history without reinterpretation', async () => {
+    const h = await harness();
+    for (let i = 0; i < 3; i++) await h.step();
+    const db = structuredClone(h.repo.getSnapshot().database);
+    const inclusive = db.identificationEvents[0];
+    inclusive.similarity = 0.85;
+    inclusive.matchPercentage = 85;
+    inclusive.margin = 0.85;
+    inclusive.samples.forEach((s) => {
+      s.similarity = 0.85;
+      s.margin = 0.85;
+    });
+    expect(() => validateDatabase(db, context)).not.toThrow();
+    const legacy = structuredClone(inclusive);
+    Object.assign(legacy, {
+      id: 'old',
+      outcome: 'UNKNOWN',
+      decisionPolicyVersion: LEGACY_IDENTIFICATION_POLICY,
+      comparisonOperator: '>',
+      personId: null,
+      templateId: null,
+      templateVersion: null,
+      personSnapshot: null,
+      scoreAggregation: 'last',
+    });
+    legacy.samples.forEach((s) =>
+      Object.assign(s, {
+        classification: 'UNKNOWN',
+        aboveThresholdCount: 0,
+        personId: null,
+        templateId: null,
+        templateVersion: null,
+      }),
+    );
+    db.identificationEvents.push(legacy);
+    expect(() => validateDatabase(db, context)).not.toThrow();
+    h.storage.setItem('db', JSON.stringify(db));
+    await h.repo.refresh();
+    expect(h.repo.getSnapshot().mode).toBe('writable');
+    await expect(
+      h.repo.commit({ type: 'saveIdentification', event: legacy, manifest }),
+    ).resolves.toBeDefined();
+    await expect(
+      h.repo.commit({ type: 'saveIdentification', event: { ...legacy, id: 'new-old' }, manifest }),
+    ).rejects.toThrow(/current scan policy/);
+    for (const policy of ['unknown-policy', IDENTIFICATION_POLICY]) {
+      const bad = structuredClone(db);
+      bad.identificationEvents[1].decisionPolicyVersion = policy;
+      expect(() => validateDatabase(bad, context)).toThrow();
+    }
+    h.repo.dispose();
+  });
   it('identifies two people independently without liveness and deduplicates continuous frames', async () => {
     const h = await harness();
     h.setFaces([face(0), face(1)]);

@@ -38,6 +38,28 @@ export function createLiveIdentificationWorkflow({
     t.status = status;
     t.similarity = null;
   }
+  function resolveCandidate(candidate) {
+    if (!candidate) return null;
+    const entry = gallery?.entries.find(
+      (e) =>
+        e.personId === candidate.personId &&
+        e.templateId === candidate.templateId &&
+        e.templateVersion === candidate.templateVersion,
+    );
+    const person = database?.people.find((p) => p.id === candidate.personId);
+    const template = database?.templates.find(
+      (t) =>
+        t.id === candidate.templateId &&
+        t.personId === candidate.personId &&
+        t.version === candidate.templateVersion,
+    );
+    if (!entry || !template || person?.activeTemplateId !== template.id) return null;
+    return {
+      ...candidate,
+      personSnapshot: entry.personSnapshot,
+      thumbnailDataUrl: template.thumbnailDataUrl ?? null,
+    };
+  }
   function display(faces = state.faces) {
     return faces.map((face) => {
       const t = tracks.get(face.trackId);
@@ -46,6 +68,7 @@ export function createLiveIdentificationWorkflow({
         identification: {
           status: t?.status ?? 'searching',
           person: t?.person ?? null,
+          closestCandidate: resolveCandidate(t?.ranking?.closestCandidate),
           similarity: t?.similarity ?? null,
           analyzedAt: t?.analyzedAt ?? null,
           ageMs: t?.analyzedAt == null ? null : Math.max(0, now() - t.analyzedAt),
@@ -102,7 +125,7 @@ export function createLiveIdentificationWorkflow({
       eligibleCount: gallery.entries.length,
       matchPercentage: percentage(decision.similarity),
       thresholdSnapshot: 0.85,
-      comparisonOperator: '>',
+      comparisonOperator: '>=',
       minMargin: MIN_MARGIN,
       decisionPolicyVersion: IDENTIFICATION_POLICY,
       scoreMappingVersion: SCORE_MAPPING,
@@ -220,7 +243,9 @@ export function createLiveIdentificationWorkflow({
                 ? 'quality_blocked'
                 : face.ambiguous
                   ? 'searching'
-                  : 'waiting_for_analysis',
+                  : !gallery.entries.length
+                    ? 'gallery_empty'
+                    : 'waiting_for_analysis',
             );
           else if (t.analyzedAt != null && timestamp - t.analyzedAt > 1500)
             clearTrack(t, 'waiting_for_analysis');

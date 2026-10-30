@@ -1,3 +1,5 @@
+import { assessLighting } from './lightingQuality';
+
 export function assessQuality(cv, source, face, policy) {
   const [x, y, w, h] = face.box;
   const left = Math.max(0, Math.floor(x)),
@@ -27,6 +29,7 @@ export function assessQuality(cv, source, face, policy) {
       faceHeight: h,
       blurVariance,
       brightness,
+      lighting: assessLighting(gray.data, width, height, [x - left, y - top, w, h]),
       landmarks: face.landmarks,
       box: face.box,
     };

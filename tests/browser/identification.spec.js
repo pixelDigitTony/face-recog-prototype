@@ -95,11 +95,14 @@ test('automatic multi-person identification uses real models without selection o
       enrollmentCtx.fillRect(0, 0, 640, 480);
       enrollmentCtx.drawImage(crop, index * 320, 40);
       const enrollmentData = enrollmentCtx.getImageData(0, 0, 640, 480);
-      const extracted = await engine.extract({
-        data: enrollmentData.data,
-        width: 640,
-        height: 480,
-      });
+      const extracted = await engine.extract(
+        {
+          data: enrollmentData.data,
+          width: 640,
+          height: 480,
+        },
+        { saveThumbnails: true },
+      );
       if (!extracted.embedding)
         throw new Error(
           `Fixture ${index} did not yield a template: ${JSON.stringify({ outcome: extracted.outcome, reason: extracted.reasonCode, quality: extracted.quality })}`,
@@ -127,6 +130,7 @@ test('automatic multi-person identification uses real models without selection o
         qualityPolicyVersion: extracted.qualityPolicyVersion,
         enrollmentSource: 'live_camera',
         enrollmentLiveness: 'passed_basic',
+        thumbnailDataUrl: extracted.thumbnailDataUrl ?? null,
       });
       image.close();
     }
@@ -142,6 +146,8 @@ test('automatic multi-person identification uses real models without selection o
   const list = page.getByRole('list', { name: 'Detected faces' });
   await expect(list).toContainText('Recognized: Fixture 0', { timeout: 90000 });
   await expect(list).toContainText('Recognized: Fixture 1', { timeout: 90000 });
+  await expect(list.getByRole('img', { name: 'Enrollment photo of Fixture 0' })).toBeVisible();
+  await expect(list.getByRole('img', { name: 'Enrollment photo of Fixture 1' })).toBeVisible();
   await expect(
     page.getByRole('list', { name: 'Recent scan results' }).getByRole('listitem'),
   ).toHaveCount(2);

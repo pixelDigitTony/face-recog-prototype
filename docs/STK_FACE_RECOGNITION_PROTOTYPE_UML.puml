@@ -527,15 +527,21 @@ Scan -> Worker : initialize recognition; setGallery(content hash)
 loop one pipeline at a time until Stop / hide / error
   UI -> Scan : unmirrored frame + capture time
   Scan -> Worker : detectFrame(frameId)
-  Worker --> Scan : all boxes + quality + detection IDs
+  Worker --> Scan : all boxes + quality + advisory lighting + detection IDs
   Scan -> Tracks : associate tracks; invalidate affected crossings
   Scan -> Worker : extractFaces(same frameId, at most 2 faces)
-  Worker --> Scan : independent full-gallery rankings
-  Scan -> Tracks : same winner + >85% + unique / margin >=0.05
+  Worker --> Scan : rankings + closestCandidate IDs/score (any score)
+  Scan -> DB : resolve active candidate name and stored thumbnail
+  DB --> Scan : current person/template snapshot or no candidate
+  Scan --> UI : per-face closest record/photo; amber if unconfirmed
+  Scan -> Tracks : same winner + >=85% + unique / margin >=0.05
   Tracks --> Scan : 3 fresh samples spanning >=600ms
-  Scan --> UI : per-face names, scores or Unknown / Ambiguous
+  Scan --> UI : green only after acceptance; amber for ambiguity/conflict
+  opt advisory lighting warnings
+    Scan --> UI : per-face Low light / Overexposed / Uneven lighting
+  end
   opt new deduplicated encounter outcome
-    Scan -> DB : validate exact gallery; atomic identification event
+    Scan -> DB : validate exact gallery; v2 inclusive event without preview/photo
     DB --> Scan : Saved locally or immutable unsaved event
   end
   Scan -> Worker : releaseFrame(frameId)
@@ -546,5 +552,8 @@ note over Scan, DB
   Enrollment retains its separate active challenge.
   One unsaved event pauses identification until retry/discard.
   History writes do not change gallery version.
+  Candidate photos remain on main thread; never worker gallery/hash.
+  Historical v1 events keep >85%; new v2 events use >=85%.
+  Lighting feedback never changes challenge progress or match gates.
 end note
 @enduml

@@ -75,6 +75,12 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
       <Typography color="text.secondary" sx={{ mb: 3 }}>
         Every detected face gets a box. Complete the motion challenge with one person in view.
       </Typography>
+      {enrollment && (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Use soft light facing you, avoid bright windows behind you and strong side shadows. Keep
+          the camera at eye level and the lens clean. Lighting feedback is advisory.
+        </Typography>
+      )}
       <Box
         sx={{
           display: 'grid',

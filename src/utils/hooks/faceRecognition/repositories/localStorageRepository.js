@@ -2,6 +2,7 @@ import { createDatabase, validateDatabase, fail } from './databaseSchema';
 import { acquireWriterLock } from './writerLock';
 import { migrateDatabase } from './migrateDatabase';
 import { buildEnrollmentGallery } from '../recognition/enrollmentGallery';
+import { IDENTIFICATION_POLICY } from '../recognition/identificationPolicy';
 
 export function createLocalStorageRepository({
   context,
@@ -126,6 +127,8 @@ export function createLocalStorageRepository({
                 fail('Identification ID conflicts with a saved record.');
               return db;
             }
+            if (operation.event.decisionPolicyVersion !== IDENTIFICATION_POLICY)
+              fail('New identification results require the current scan policy.');
             const gallery = await buildEnrollmentGallery(db, operation.manifest, context);
             if (
               gallery.version !== operation.event.galleryVersion ||

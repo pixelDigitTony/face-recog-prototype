@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box } from '@mui/material';
 import { LivenessPrompt } from './LivenessPrompt';
+import { ClosestRecord, identificationPresentation } from './ClosestRecord';
+import { LightingFeedback } from './LightingFeedback';
 import { formatPercentage } from '@/utils/hooks/faceRecognition/recognition/matchPolicy';
 export function overlayBox(box, frameSize, size, mirrored = true) {
   const scale = Math.max(size[0] / frameSize[0], size[1] / frameSize[1]);
@@ -23,6 +25,7 @@ function FaceLabel({
   actionLabel,
   similarity,
   maxLabelWidth,
+  labelLeft,
 }) {
   const ref = useRef(null),
     [height, setHeight] = useState(64);
@@ -34,7 +37,8 @@ function FaceLabel({
     return () => observer.disconnect();
   }, []);
   const width = Math.max(0, Math.min(size[0] - 16, maxLabelWidth, Math.max(190, box.width)));
-  const left = Math.max(8, Math.min(box.left + (box.width - width) / 2, size[0] - width - 8));
+  const left =
+    labelLeft ?? Math.max(8, Math.min(box.left + (box.width - width) / 2, size[0] - width - 8));
   const top = Math.max(8, Math.min(box.top - height - 14, size[1] - height - 16));
   return (
     <Box
@@ -46,6 +50,8 @@ function FaceLabel({
         left,
         top,
         width,
+        maxHeight: Math.max(0, size[1] - 16),
+        overflow: 'hidden',
         boxSizing: 'border-box',
         zIndex: 2,
         bgcolor: 'rgba(8,29,27,.88)',
@@ -63,26 +69,17 @@ function FaceLabel({
       )}
       <Box data-testid="face-label-details" sx={{ fontSize: 11, lineHeight: 1.4 }}>
         {face.identification && (
-          <Box component="div" sx={{ fontWeight: 700 }}>
-            {face.identification.person
-              ? `Recognized: ${face.identification.person.personSnapshot.displayName} (${face.identification.person.personSnapshot.employeeCode})`
-              : ({
-                  unknown: 'Unknown face',
-                  ambiguous: 'Ambiguous match',
-                  quality_blocked: 'Low image quality',
-                  waiting_for_analysis: 'Waiting for analysis',
-                  identity_conflict: 'Identity conflict',
-                }[face.identification.status] ?? 'Searching')}
-          </Box>
+          <ClosestRecord identification={face.identification} compact={width < 160} />
         )}
         Face #{face.trackId} · Detection {(face.confidence * 100).toFixed(1)}%
         {similarity !== null && similarity !== undefined && (
           <>
             <br />
-            Match {formatPercentage(similarity)}
+            Similarity: {formatPercentage(similarity)}
           </>
         )}
       </Box>
+      <LightingFeedback lighting={face.quality?.lighting} guidance={showInstructions} />
     </Box>
   );
 }
@@ -113,6 +110,18 @@ export function FaceOverlay({
     >
       {frameSize &&
         faces.map((face) => {
+          // Give crowded labels disjoint horizontal slots in mirrored screen
+          // order. The box and label retain the same track key as faces move.
+          const columns = faces.length > 1;
+          const ordered = columns
+            ? [...faces].sort((a, b) => {
+                const first = overlayBox(a.box, frameSize, size);
+                const second = overlayBox(b.box, frameSize, size);
+                return first.left + first.width / 2 - second.left - second.width / 2;
+              })
+            : [];
+          const slot = ordered.findIndex((f) => f.trackId === face.trackId);
+          const slotWidth = (size[0] - 16) / faces.length;
           const box = overlayBox(face.box, frameSize, size),
             blocked = face.identification
               ? [
@@ -132,8 +141,8 @@ export function FaceOverlay({
                   position: 'absolute',
                   ...box,
                   border: '2px solid',
-                  borderColor: face.identification?.person
-                    ? '#70e39a'
+                  borderColor: face.identification
+                    ? identificationPresentation(face.identification).color
                     : blocked
                       ? '#ffbf47'
                       : '#68c9ff',
@@ -144,9 +153,8 @@ export function FaceOverlay({
                 face={face}
                 box={box}
                 size={size}
-                maxLabelWidth={
-                  faces.length > 1 ? Math.max(104, size[0] / faces.length - 16) : size[0] - 16
-                }
+                maxLabelWidth={columns ? Math.max(0, slotWidth - 8) : size[0] - 16}
+                labelLeft={columns ? 12 + slot * slotWidth : undefined}
                 showInstructions={showInstructions}
                 liveness={liveness}
                 status={faces.length > 1 ? 'multiple_faces' : status}

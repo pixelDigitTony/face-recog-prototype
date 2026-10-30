@@ -107,7 +107,11 @@ export function DatabasePage() {
                 label: 'Match similarity',
                 render: (row) => formatPercentage(row.similarity),
               },
-              { key: 'thresholdSnapshot', label: 'Threshold', render: () => '> 85%' },
+              {
+                key: 'thresholdSnapshot',
+                label: 'Threshold',
+                render: (row) => `${row.comparisonOperator} ${row.thresholdSnapshot * 100}%`,
+              },
               { key: 'faceCountAtDecision', label: 'Face count' },
               { key: 'livenessStatus', label: 'Liveness' },
               { key: 'source', label: 'Source' },

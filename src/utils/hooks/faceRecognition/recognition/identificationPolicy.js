@@ -2,12 +2,28 @@ import { cosineSimilarity } from './cosineSimilarity';
 import { percentage } from './matchPolicy';
 import { LIVE_TIMING } from './liveTiming';
 
-export const IDENTIFICATION_POLICY = 'identify-85-strict-v1';
-export const MIN_MARGIN = 0.05;
-export function classifyRanking(score, runnerUpSimilarity, aboveThresholdCount) {
+export const LEGACY_IDENTIFICATION_POLICY = 'identify-85-strict-v1';
+export const IDENTIFICATION_POLICY = 'identify-85-inclusive-v2';
+export const identificationOperator = (policy) => {
+  if (policy === IDENTIFICATION_POLICY) return '>=';
+  if (policy === LEGACY_IDENTIFICATION_POLICY) return '>';
+  throw new Error('Unknown identification policy.');
+};
+export function identificationPassed(score, policy = IDENTIFICATION_POLICY) {
+  if (!Number.isFinite(score)) throw new Error('Invalid cosine score.');
   percentage(score);
+  return identificationOperator(policy) === '>=' ? score >= 0.85 : score > 0.85;
+}
+export const MIN_MARGIN = 0.05;
+export function classifyRanking(
+  score,
+  runnerUpSimilarity,
+  aboveThresholdCount,
+  policy = IDENTIFICATION_POLICY,
+) {
+  const passed = identificationPassed(score, policy);
   if (runnerUpSimilarity !== null) percentage(runnerUpSimilarity);
-  if (score <= 0.85) return 'UNKNOWN';
+  if (!passed) return 'UNKNOWN';
   return aboveThresholdCount === 1 &&
     (runnerUpSimilarity === null || score - runnerUpSimilarity >= MIN_MARGIN)
     ? 'IDENTIFIED'
@@ -20,7 +36,7 @@ export function rankEmbedding(embedding, entries) {
     .sort((a, b) => b.score - a.score || a.entry.personId.localeCompare(b.entry.personId));
   const { entry, score } = ranked[0],
     runnerUpSimilarity = ranked[1]?.score ?? null;
-  const aboveThresholdCount = ranked.filter((r) => r.score > 0.85).length;
+  const aboveThresholdCount = ranked.filter((r) => identificationPassed(r.score)).length;
   const classification = classifyRanking(score, runnerUpSimilarity, aboveThresholdCount);
   return {
     classification,
@@ -28,6 +44,12 @@ export function rankEmbedding(embedding, entries) {
     runnerUpSimilarity,
     margin: runnerUpSimilarity === null ? null : score - runnerUpSimilarity,
     aboveThresholdCount,
+    closestCandidate: {
+      personId: entry.personId,
+      templateId: entry.templateId,
+      templateVersion: entry.templateVersion,
+      similarity: score,
+    },
     personId: classification === 'IDENTIFIED' ? entry.personId : null,
     templateId: classification === 'IDENTIFIED' ? entry.templateId : null,
     templateVersion: classification === 'IDENTIFIED' ? entry.templateVersion : null,
@@ -57,7 +79,9 @@ export function createIdentificationWindow() {
       )
         samples = [];
       binding = key;
-      samples.push({ ...result, timestamp });
+      // Presentation candidates must never enter persisted decision evidence.
+      const { closestCandidate, ...evidence } = result;
+      samples.push({ ...evidence, timestamp });
       samples = samples.slice(-3);
       const duration = timestamp - samples[0].timestamp;
       if (samples.length !== 3 || duration < 600) return null;

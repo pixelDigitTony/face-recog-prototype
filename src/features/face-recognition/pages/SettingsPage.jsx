@@ -84,13 +84,13 @@ export function SettingsPage() {
                 <Stack spacing={2}>
                   <TextField
                     name="threshold"
-                    label="Required cosine threshold (above 85%)"
+                    label="Cosine threshold (85%)"
                     disabled
                     defaultValue={settings.matchThreshold}
                     type="number"
                     required
                     slotProps={{ htmlInput: { min: -1, max: 1, step: 0.001 } }}
-                    helperText="Fixed rule: raw similarity > 0.85. Historical attempts keep their original policy."
+                    helperText="Scan: similarity ≥ 0.85, stable and unique. Enrollment consistency: > 0.85. History keeps its recorded policy."
                   />
                   <FormControlLabel
                     control={<Switch name="thumbnails" defaultChecked={settings.saveThumbnails} />}

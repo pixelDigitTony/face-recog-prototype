@@ -1,6 +1,7 @@
 import {
   classifyRanking,
-  IDENTIFICATION_POLICY,
+  identificationOperator,
+  identificationPassed,
   MIN_MARGIN,
 } from '../recognition/identificationPolicy';
 import { percentage, SCORE_MAPPING } from '../recognition/matchPolicy';
@@ -9,6 +10,8 @@ export function validateIdentificationEvent(event, scope) {
   const fail = () => {
     throw new Error('Invalid identification evidence.');
   };
+  const policy = event?.decisionPolicyVersion;
+  const operator = identificationOperator(policy);
   if (
     !event ||
     event.purpose !== 'identify' ||
@@ -16,7 +19,6 @@ export function validateIdentificationEvent(event, scope) {
     event.environment !== scope.environment ||
     event.companyId !== scope.companyId ||
     (scope.storeId != null && event.storeId !== scope.storeId) ||
-    event.decisionPolicyVersion !== IDENTIFICATION_POLICY ||
     event.scoreMappingVersion !== SCORE_MAPPING ||
     event.source !== 'live_camera' ||
     event.authoritative !== false ||
@@ -25,7 +27,8 @@ export function validateIdentificationEvent(event, scope) {
     event.probeEmbedding !== null ||
     event.thumbnailDataUrl !== null ||
     event.thresholdSnapshot !== 0.85 ||
-    event.comparisonOperator !== '>' ||
+    event.comparisonOperator !== operator ||
+    event.closestCandidate !== undefined ||
     event.minMargin !== MIN_MARGIN ||
     ![event.id, event.sessionId, event.encounterId, event.galleryVersion].every(
       (s) => typeof s === 'string' && s.length > 0,
@@ -82,14 +85,22 @@ export function validateIdentificationEvent(event, scope) {
           ? null
           : sample.similarity - sample.runnerUpSimilarity) ||
       sample.classification !== event.outcome ||
-      classifyRanking(sample.similarity, sample.runnerUpSimilarity, sample.aboveThresholdCount) !==
-        event.outcome ||
-      (sample.similarity <= 0.85
+      sample.closestCandidate !== undefined ||
+      classifyRanking(
+        sample.similarity,
+        sample.runnerUpSimilarity,
+        sample.aboveThresholdCount,
+        policy,
+      ) !== event.outcome ||
+      (!identificationPassed(sample.similarity, policy)
         ? sample.aboveThresholdCount !== 0
         : sample.aboveThresholdCount < 1) ||
-      (sample.runnerUpSimilarity > 0.85 && sample.aboveThresholdCount < 2) ||
-      (sample.runnerUpSimilarity <= 0.85 &&
-        sample.similarity > 0.85 &&
+      (sample.runnerUpSimilarity !== null &&
+        identificationPassed(sample.runnerUpSimilarity, policy) &&
+        sample.aboveThresholdCount < 2) ||
+      ((sample.runnerUpSimilarity === null ||
+        !identificationPassed(sample.runnerUpSimilarity, policy)) &&
+        identificationPassed(sample.similarity, policy) &&
         sample.aboveThresholdCount !== 1) ||
       (previous &&
         (sample.timestamp <= previous.timestamp || sample.timestamp - previous.timestamp > 1500)) ||

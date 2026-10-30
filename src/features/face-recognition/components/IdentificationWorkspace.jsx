@@ -22,6 +22,7 @@ import { formatPercentage } from '@/utils/hooks/faceRecognition/recognition/matc
 import { RecordDetailsDialog } from '@/components/dialogs/faceRecognition/RecordDetailsDialog';
 import { FaceOverlay } from './FaceOverlay';
 import { DetectedFacesList } from './DetectedFacesList';
+import { candidateAnnouncement } from './ClosestRecord';
 
 export const identificationStatus = (status) =>
   ({
@@ -39,10 +40,7 @@ export function IdentificationWorkspace() {
   const [details, setDetails] = useState(null);
   const active = live.camera.active || live.starting;
   const announcement = live.faces
-    .map(
-      (f) =>
-        `Face ${f.trackId}: ${identificationStatus(f.identification.status)}${f.identification.person ? `, ${f.identification.person.personSnapshot.displayName}` : ''}`,
-    )
+    .map((f) => `Face ${f.trackId}: ${candidateAnnouncement(f.identification)}`)
     .join('. ');
   return (
     <>
@@ -152,7 +150,7 @@ export function IdentificationWorkspace() {
               Similarity identification · Liveness not checked
             </Typography>
             <Typography variant="caption" display="block">
-              Required: above 85% · Similarity score, not identity probability.
+              Green: at least 85%, stable and unique · Similarity score, not identity probability.
             </Typography>
             {live.error && (
               <Alert severity="error" sx={{ mt: 2 }}>
