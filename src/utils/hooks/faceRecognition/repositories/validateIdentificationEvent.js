@@ -1,4 +1,5 @@
 import {
+  IDENTIFICATION_POLICY,
   classifyRanking,
   identificationOperator,
   identificationPassed,
@@ -12,6 +13,7 @@ export function validateIdentificationEvent(event, scope) {
   };
   const policy = event?.decisionPolicyVersion;
   const operator = identificationOperator(policy);
+  const multi = policy === IDENTIFICATION_POLICY;
   if (
     !event ||
     event.purpose !== 'identify' ||
@@ -38,6 +40,10 @@ export function validateIdentificationEvent(event, scope) {
     !Number.isInteger(event.eligibleCount) ||
     event.eligibleCount < 1 ||
     event.eligibleCount > 50 ||
+    (multi &&
+      (!Number.isInteger(event.eligibleSampleCount) ||
+        event.eligibleSampleCount < event.eligibleCount ||
+        event.eligibleSampleCount > 250)) ||
     !Number.isInteger(event.faceCountAtDecision) ||
     event.faceCountAtDecision < 1 ||
     !Number.isFinite(Date.parse(event.startedAt)) ||
@@ -105,8 +111,15 @@ export function validateIdentificationEvent(event, scope) {
       (previous &&
         (sample.timestamp <= previous.timestamp || sample.timestamp - previous.timestamp > 1500)) ||
       sample.personId !== event.personId ||
-      sample.templateId !== event.templateId ||
-      sample.templateVersion !== event.templateVersion
+      (!multi &&
+        (sample.templateId !== event.templateId ||
+          sample.templateVersion !== event.templateVersion)) ||
+      (multi &&
+        identified &&
+        (!sample.templateId ||
+          !Number.isInteger(sample.templateVersion) ||
+          sample.templateVersion < 1)) ||
+      (multi && !identified && (sample.templateId !== null || sample.templateVersion !== null))
     )
       fail();
   }
@@ -124,6 +137,9 @@ export function validateIdentificationEvent(event, scope) {
     event.similarity !== summary.similarity ||
     event.runnerUpSimilarity !== summary.runnerUpSimilarity ||
     event.margin !== summary.margin ||
+    (multi &&
+      (event.templateId !== summary.templateId ||
+        event.templateVersion !== summary.templateVersion)) ||
     event.matchPercentage !== percentage(event.similarity)
   )
     fail();

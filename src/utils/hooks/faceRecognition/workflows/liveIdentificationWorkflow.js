@@ -38,6 +38,7 @@ export function createLiveIdentificationWorkflow({
     t.status = status;
     t.similarity = null;
     t.confirmedAt = null;
+    t.supporting = [];
   }
   function resolveCandidate(candidate) {
     if (!candidate) return null;
@@ -54,11 +55,12 @@ export function createLiveIdentificationWorkflow({
         t.personId === candidate.personId &&
         t.version === candidate.templateVersion,
     );
-    if (!entry || !template || person?.activeTemplateId !== template.id) return null;
+    if (!entry || !template || !person) return null;
     return {
       ...candidate,
       personSnapshot: entry.personSnapshot,
       thumbnailDataUrl: template.thumbnailDataUrl ?? null,
+      sampleLabel: template.label,
     };
   }
   function display(faces = state.faces) {
@@ -90,7 +92,11 @@ export function createLiveIdentificationWorkflow({
     if (gallery?.version === next.version) {
       if (gallery.excludedCount !== next.excludedCount)
         publish({
-          gallery: { eligibleCount: next.entries.length, excludedCount: next.excludedCount },
+          gallery: {
+            eligibleCount: next.eligibleCount,
+            eligibleSampleCount: next.entries.length,
+            excludedCount: next.excludedCount,
+          },
         });
       gallery = next;
       return false;
@@ -98,11 +104,8 @@ export function createLiveIdentificationWorkflow({
     const previousGallery = gallery;
     gallery = next;
     for (const t of tracks.values()) {
-      const prior = previousGallery?.entries.find((e) => e.personId === t.person?.personId);
-      const entry = next.entries.find((e) => e.personId === t.person?.personId);
-      // Unrelated enrollments and display-only edits do not invalidate a
-      // confirmed face. Its actual active biometric template must still match.
       const fingerprint = (e) =>
+        e &&
         JSON.stringify([
           e.templateId,
           e.templateVersion,
@@ -112,21 +115,36 @@ export function createLiveIdentificationWorkflow({
           e.enrollmentSource,
           e.enrollmentLiveness,
         ]);
-      if (t.confirmedAt != null && prior && entry && fingerprint(prior) === fingerprint(entry))
-        t.person = entry;
+      const preserved =
+        t.supporting?.length &&
+        t.supporting.every((id) => {
+          const before = previousGallery?.entries.find((e) => e.templateId === id);
+          const after = next.entries.find((e) => e.templateId === id);
+          return before && after && fingerprint(before) === fingerprint(after);
+        });
+      const entry = next.entries.find(
+        (e) => e.personId === t.person?.personId && e.templateId === t.person?.templateId,
+      );
+      if (t.confirmedAt != null && preserved && entry) t.person = entry;
       else clearTrack(t);
     }
     cooldown.clear();
     await engine.setGallery(next);
     if (token === generation)
       publish({
-        gallery: { eligibleCount: next.entries.length, excludedCount: next.excludedCount },
+        gallery: {
+          eligibleCount: next.eligibleCount,
+          eligibleSampleCount: next.entries.length,
+          excludedCount: next.excludedCount,
+        },
         faces: display(),
       });
     return true;
   }
   function eventFor(track, face, decision, count) {
-    const person = gallery.entries.find((e) => e.personId === decision.personId);
+    const person = gallery.entries.find(
+      (e) => e.personId === decision.personId && e.templateId === decision.templateId,
+    );
     const { timestamp, classification, ...evidence } = decision;
     return {
       ...evidence,
@@ -144,7 +162,8 @@ export function createLiveIdentificationWorkflow({
       templateId: person?.templateId ?? null,
       templateVersion: person?.templateVersion ?? null,
       galleryVersion: gallery.version,
-      eligibleCount: gallery.entries.length,
+      eligibleCount: gallery.eligibleCount,
+      eligibleSampleCount: gallery.entries.length,
       matchPercentage: percentage(decision.similarity),
       thresholdSnapshot: 0.85,
       comparisonOperator: '>=',
@@ -340,7 +359,9 @@ export function createLiveIdentificationWorkflow({
           if (decision) {
             t.status = decision.outcome.toLowerCase();
             t.person = decision.personId
-              ? gallery.entries.find((e) => e.personId === decision.personId)
+              ? gallery.entries.find(
+                  (e) => e.personId === decision.personId && e.templateId === decision.templateId,
+                )
               : null;
             decisions.push({ t, face, decision });
           }
@@ -368,9 +389,12 @@ export function createLiveIdentificationWorkflow({
         for (const { t, decision } of decisions) {
           if (decision.outcome === 'IDENTIFIED' && t.status !== 'identity_conflict') {
             t.confirmedAt = timestamp;
+            t.supporting = decision.samples.map((s) => s.templateId);
             t.similarity = decision.similarity;
             t.ranking.closestCandidate = {
-              ...t.ranking.closestCandidate,
+              personId: decision.personId,
+              templateId: decision.templateId,
+              templateVersion: decision.templateVersion,
               similarity: decision.similarity,
             };
           }

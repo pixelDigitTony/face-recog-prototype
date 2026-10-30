@@ -2,6 +2,8 @@
 
 > Current scan behavior is extended by [the closest-record and lighting specification](STK_CLOSEST_FACE_MATCH_AND_LIGHTING_SPEC.md). It supersedes this document's candidate-name suppression, strict scan cutoff and color rules: current scans preview each face's closest record/photo and use `identify-85-inclusive-v2` (>=85%, stable and unique). The strict v1 rules below remain the historical reference for existing events. Enrollment behavior is unchanged.
 
+Current multi-sample behavior supersedes single-template assumptions: see [Anthony's Face Lab multi-sample specification](ANTHONYS_FACE_LAB_MULTI_SAMPLE_EVALUATION_SPEC.md). Scan now uses `identify-85-multisample-v3`; historical policies retain their original rules.
+
 Status: **Implemented locally — see IMPLEMENTATION.md for validation and remaining device acceptance.**
 Date: 2026-10-29 (Asia/Manila).  
 Project: `C:\Users\USER\projects\Starwinner\face-recog-prototype`.  

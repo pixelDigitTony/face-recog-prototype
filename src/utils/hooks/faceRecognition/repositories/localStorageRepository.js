@@ -1,3 +1,8 @@
+import {
+  evaluateTrial,
+  validateEvaluationTrial,
+  compactEvaluationReport,
+} from '../recognition/evaluation';
 import { createDatabase, validateDatabase, fail } from './databaseSchema';
 import { acquireWriterLock } from './writerLock';
 import { migrateDatabase } from './migrateDatabase';
@@ -46,6 +51,7 @@ export function createLocalStorageRepository({
     const raw = JSON.stringify(db);
     if (
       db.people.length > db.settings.maxPeople ||
+      db.evaluationTrials.length > 100 ||
       db.attempts.length + db.identificationEvents.length > db.settings.maxAttempts ||
       raw.length * 2 > db.settings.maxEstimatedBytes
     )
@@ -116,7 +122,12 @@ export function createLocalStorageRepository({
             return db;
           }
           const person = db.people.find((p) => p.id === operation.attempt.personId);
-          if (!person || person.activeTemplateId !== operation.expectedTemplateId)
+          if (
+            !person ||
+            (operation.expectedEnrollmentRevision !== undefined
+              ? person.enrollmentRevision !== operation.expectedEnrollmentRevision
+              : person.primaryTemplateId !== operation.expectedTemplateId)
+          )
             fail('Enrollment changed. Discard this result and capture again.', 'STALE_CONTEXT');
         }
         switch (operation.type) {
@@ -132,13 +143,31 @@ export function createLocalStorageRepository({
             const gallery = await buildEnrollmentGallery(db, operation.manifest, context);
             if (
               gallery.version !== operation.event.galleryVersion ||
-              gallery.entries.length !== operation.event.eligibleCount
+              gallery.eligibleCount !== operation.event.eligibleCount ||
+              gallery.entries.length !== operation.event.eligibleSampleCount
             )
               fail(
                 'Enrollments changed. Discard this scan result and scan again.',
                 'STALE_CONTEXT',
               );
-            const winner = gallery.entries.find((e) => e.personId === operation.event.personId);
+            const winner = gallery.entries.find(
+              (e) =>
+                e.personId === operation.event.personId &&
+                e.templateId === operation.event.templateId,
+            );
+            if (
+              operation.event.outcome === 'IDENTIFIED' &&
+              operation.event.samples.some(
+                (s) =>
+                  !gallery.entries.some(
+                    (e) =>
+                      e.personId === s.personId &&
+                      e.templateId === s.templateId &&
+                      e.templateVersion === s.templateVersion,
+                  ),
+              )
+            )
+              fail('Supporting sample changed.', 'STALE_CONTEXT');
             if (
               operation.event.outcome === 'IDENTIFIED' &&
               (!winner ||
@@ -170,21 +199,108 @@ export function createLocalStorageRepository({
             const prior = db.people.find((p) => p.id === person.id);
             if (prior)
               Object.assign(prior, person, {
-                activeTemplateId: prior.activeTemplateId,
+                primaryTemplateId: prior.primaryTemplateId,
+                enrollmentRevision: prior.enrollmentRevision,
                 createdAt: prior.createdAt,
               });
-            else db.people.push({ ...person, activeTemplateId: null, createdAt: now });
+            else
+              db.people.push({
+                ...person,
+                primaryTemplateId: null,
+                enrollmentRevision: 0,
+                createdAt: now,
+              });
             break;
           }
           case 'saveEnrollment': {
             const person = db.people.find((p) => p.id === operation.attempt.personId);
-            db.templates = db.templates.filter((t) => t.personId !== person.id);
+            const samples = db.templates.filter((t) => t.personId === person.id);
+            if (
+              operation.replaceTemplateId &&
+              !samples.some((t) => t.id === operation.replaceTemplateId)
+            )
+              fail('Sample changed.', 'STALE_CONTEXT');
+            if (!operation.replaceTemplateId && samples.length >= 5)
+              fail('Five sample limit reached. Replace or delete a sample.', 'CAPACITY_ERROR');
+            if (operation.replaceTemplateId)
+              db.templates = db.templates.filter((t) => t.id !== operation.replaceTemplateId);
+            operation.template.label ||= `Sample ${person.enrollmentRevision + 1}`;
+            operation.template.version = person.enrollmentRevision + 1;
+            operation.attempt.templateVersion = operation.template.version;
             db.templates.push(operation.template);
-            person.activeTemplateId = operation.template.id;
+            if (
+              !person.primaryTemplateId ||
+              person.primaryTemplateId === operation.replaceTemplateId
+            )
+              person.primaryTemplateId = operation.template.id;
+            person.enrollmentRevision++;
             person.updatedAt = now;
             db.attempts.push(operation.attempt);
             break;
           }
+          case 'deleteSample':
+          case 'setPrimarySample':
+          case 'renameSample': {
+            const sample = db.templates.find(
+              (t) => t.id === operation.templateId && t.personId === operation.personId,
+            );
+            const person = db.people.find((p) => p.id === operation.personId);
+            if (
+              !sample ||
+              !person ||
+              person.enrollmentRevision !== operation.expectedEnrollmentRevision
+            )
+              fail('Sample changed. Refresh and try again.', 'STALE_CONTEXT');
+            if (operation.type === 'renameSample') sample.label = operation.label.trim();
+            else {
+              if (operation.type === 'deleteSample') {
+                db.templates = db.templates.filter((t) => t.id !== sample.id);
+                if (person.primaryTemplateId === sample.id)
+                  person.primaryTemplateId =
+                    db.templates
+                      .filter((t) => t.personId === person.id)
+                      .sort(
+                        (a, b) =>
+                          (a.createdAt || '').localeCompare(b.createdAt || '') ||
+                          a.id.localeCompare(b.id),
+                      )[0]?.id ?? null;
+              } else person.primaryTemplateId = sample.id;
+              person.enrollmentRevision++;
+            }
+            person.updatedAt = now;
+            break;
+          }
+          case 'saveEvaluation': {
+            const prior = db.evaluationTrials.find((t) => t.id === operation.trial.id);
+            if (prior) {
+              if (JSON.stringify(prior) !== JSON.stringify(operation.trial))
+                fail('Evaluation ID conflicts.');
+              return db;
+            }
+            const gallery = await buildEnrollmentGallery(db, operation.manifest, context);
+            if (gallery.version !== operation.trial.galleryVersion)
+              fail('Gallery changed. Capture again.', 'STALE_CONTEXT');
+            validateEvaluationTrial(operation.trial, db, context);
+            operation.trial.report = compactEvaluationReport(
+              evaluateTrial(operation.trial, gallery, operation.manifest),
+            );
+            db.evaluationTrials.push(operation.trial);
+            break;
+          }
+          case 'rerunEvaluations': {
+            const gallery = await buildEnrollmentGallery(db, operation.manifest, context);
+            for (const trial of db.evaluationTrials)
+              trial.report = compactEvaluationReport(
+                evaluateTrial(trial, gallery, operation.manifest),
+              );
+            break;
+          }
+          case 'deleteEvaluation':
+            db.evaluationTrials = db.evaluationTrials.filter((t) => t.id !== operation.id);
+            break;
+          case 'clearEvaluations':
+            db.evaluationTrials = [];
+            break;
           case 'saveAttempt':
             db.attempts.push(operation.attempt);
             break;
@@ -197,6 +313,7 @@ export function createLocalStorageRepository({
           case 'deletePerson':
             db.people = db.people.filter((p) => p.id !== operation.id);
             db.templates = db.templates.filter((t) => t.personId !== operation.id);
+            db.evaluationTrials = db.evaluationTrials.filter((t) => t.personId !== operation.id);
             db.attempts = db.attempts.filter((a) => a.personId !== operation.id);
             db.identificationEvents = db.identificationEvents.filter(
               (e) => e.personId !== operation.id,

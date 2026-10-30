@@ -43,7 +43,11 @@ export function createFaceWorkflow({ repository, engine, context }) {
       const person = structuredClone(db?.people.find((p) => p.id === personId));
       if (!person?.acknowledgedAt)
         throw new Error('Select a person and acknowledge browser storage first.');
-      const template = structuredClone(db.templates.find((t) => t.id === person.activeTemplateId));
+      if (purpose === 'verify') await engine.initialize?.();
+      const eligible = db.templates.filter(
+        (t) => t.personId === personId && compatibleTemplate(t, engine.manifest),
+      );
+      const template = structuredClone(db.templates.find((t) => t.id === person.primaryTemplateId));
       const settings = { ...db.settings },
         startedAt = new Date().toISOString();
       let extracted = {},
@@ -53,11 +57,10 @@ export function createFaceWorkflow({ repository, engine, context }) {
         extracted = prepared.extracted || {};
         capturedAt = new Date().toISOString();
         outcome = prepared.outcome;
-        if (person.activeTemplateId !== prepared.expectedTemplateId)
+        if (person.primaryTemplateId !== prepared.expectedTemplateId)
           throw new Error('Enrollment changed. Start again.');
       } else if (purpose === 'verify' && !template) outcome = 'NOT_ENROLLED';
-      else if (purpose === 'verify' && !compatibleTemplate(template, engine.manifest))
-        outcome = 'MODEL_MISMATCH';
+      else if (purpose === 'verify' && !eligible.length) outcome = 'MODEL_MISMATCH';
       else {
         let frame;
         try {
@@ -88,7 +91,13 @@ export function createFaceWorkflow({ repository, engine, context }) {
         if (purpose === 'enroll') outcome = 'ENROLLED';
         else {
           const start = performance.now();
-          similarity = cosineSimilarity(extracted.embedding, template.embedding);
+          const ranked = eligible
+            .map((t) => ({ t, score: cosineSimilarity(extracted.embedding, t.embedding) }))
+            .sort((a, b) => b.score - a.score);
+          similarity = ranked[0]?.score ?? null;
+          if (ranked[0]) {
+            extracted.winningTemplateId = ranked[0].t.id;
+          }
           outcome = 'DIAGNOSTIC_ONLY';
           extracted.timingsMs.comparison = performance.now() - start;
         }
@@ -104,8 +113,11 @@ export function createFaceWorkflow({ repository, engine, context }) {
         companyId: context.companyId,
         storeId: context.storeId ?? null,
         personSnapshot: { employeeCode: person.employeeCode, displayName: person.displayName },
-        templateId: template?.id ?? null,
-        templateVersion: template?.version ?? null,
+        templateId: extracted.winningTemplateId ?? template?.id ?? null,
+        templateVersion:
+          eligible.find((t) => t.id === extracted.winningTemplateId)?.version ??
+          template?.version ??
+          null,
         startedAt,
         capturedAt,
         completedAt: new Date().toISOString(),
@@ -135,7 +147,10 @@ export function createFaceWorkflow({ repository, engine, context }) {
       const operation = {
         type: 'saveAttempt',
         attempt,
-        expectedTemplateId: person.activeTemplateId,
+        expectedTemplateId: person.primaryTemplateId,
+        expectedEnrollmentRevision:
+          prepared?.expectedEnrollmentRevision ?? person.enrollmentRevision,
+        replaceTemplateId: prepared?.replaceTemplateId ?? null,
       };
       if (outcome === 'ENROLLED' || (!prepared && purpose === 'enroll' && extracted.embedding)) {
         const newTemplate = {
@@ -143,7 +158,8 @@ export function createFaceWorkflow({ repository, engine, context }) {
           personId,
           companyId: context.companyId,
           storeId: context.storeId ?? null,
-          version: (template?.version ?? 0) + 1,
+          version: (person.enrollmentRevision ?? 0) + 1,
+          label: prepared?.sampleLabel?.trim() || `Sample ${(person.enrollmentRevision ?? 0) + 1}`,
           embedding: extracted.embedding,
           modelIdentity: extracted.modelIdentity,
           preprocessingVersion: extracted.preprocessingVersion,

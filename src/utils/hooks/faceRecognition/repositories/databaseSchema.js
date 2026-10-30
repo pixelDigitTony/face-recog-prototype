@@ -1,3 +1,4 @@
+import { validateEvaluationTrial } from '../recognition/evaluation';
 import { defaultSettings, OUTCOMES } from '@/features/face-recognition/constants';
 import { percentage, LIVE_POLICY } from '../recognition/matchPolicy';
 import { LIVE_TIMING } from '../recognition/liveTiming';
@@ -6,7 +7,7 @@ import { validateIdentificationEvent } from './validateIdentificationEvent';
 export function createDatabase(scope) {
   const now = new Date().toISOString();
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     databaseId: crypto.randomUUID(),
     revision: 0,
     createdAt: now,
@@ -16,6 +17,7 @@ export function createDatabase(scope) {
     templates: [],
     attempts: [],
     identificationEvents: [],
+    evaluationTrials: [],
     settings: { ...defaultSettings },
   };
 }
@@ -29,7 +31,7 @@ export function validateEmbedding(value) {
   if (Math.abs(norm - 1) > 0.005) fail('Embedding must be normalized.');
 }
 export function validateDatabase(db, scope, legacy = false) {
-  if (!db || db.schemaVersion !== (legacy === true ? 1 : legacy === 2 ? 2 : 3))
+  if (!db || db.schemaVersion !== (legacy === true ? 1 : typeof legacy === 'number' ? legacy : 4))
     fail(
       'Unsupported database schema. Export the original data or reset this prototype.',
       'SCHEMA_ERROR',
@@ -57,7 +59,8 @@ export function validateDatabase(db, scope, legacy = false) {
     'people',
     'templates',
     'attempts',
-    ...(db.schemaVersion === 3 ? ['identificationEvents'] : []),
+    ...(db.schemaVersion >= 3 ? ['identificationEvents'] : []),
+    ...(db.schemaVersion === 4 ? ['evaluationTrials'] : []),
   ]) {
     if (!Array.isArray(db[key])) fail(`Invalid ${key} collection.`);
     const ids = new Set();
@@ -91,16 +94,34 @@ export function validateDatabase(db, scope, legacy = false) {
       fail('Invalid or duplicate employee code.');
     codes.add(person.normalizedEmployeeCode);
     if (
-      person.activeTemplateId &&
-      !db.templates.some((t) => t.id === person.activeTemplateId && t.personId === person.id)
+      (db.schemaVersion < 4 ? person.activeTemplateId : person.primaryTemplateId) &&
+      !db.templates.some(
+        (t) =>
+          t.id === (db.schemaVersion < 4 ? person.activeTemplateId : person.primaryTemplateId) &&
+          t.personId === person.id,
+      )
     )
       fail('Person template link is invalid.');
+  }
+  if (db.schemaVersion === 4) {
+    for (const person of db.people) {
+      const count = db.templates.filter((t) => t.personId === person.id).length;
+      if (
+        !Number.isInteger(person.enrollmentRevision) ||
+        person.enrollmentRevision < 0 ||
+        count > 5 ||
+        Boolean(count) !== Boolean(person.primaryTemplateId)
+      )
+        fail('Invalid sample set.');
+    }
+    if (db.evaluationTrials.length > 100) fail('Evaluation trial limit reached.', 'CAPACITY_ERROR');
+    for (const trial of db.evaluationTrials) validateEvaluationTrial(trial, db, scope);
   }
   const templatePeople = new Set();
   for (const template of db.templates) {
     if (
       !people.has(template.personId) ||
-      templatePeople.has(template.personId) ||
+      (db.schemaVersion < 4 && templatePeople.has(template.personId)) ||
       !Number.isInteger(template.version) ||
       template.version < 1 ||
       !template.modelIdentity?.recognizer?.sha256 ||
@@ -108,6 +129,11 @@ export function validateDatabase(db, scope, legacy = false) {
     )
       fail('Invalid active template.');
     templatePeople.add(template.personId);
+    if (
+      db.schemaVersion === 4 &&
+      (typeof template.label !== 'string' || !template.label.trim() || template.label.length > 60)
+    )
+      fail('Invalid sample label.');
     validateEmbedding(template.embedding);
   }
   for (const attempt of db.attempts) {

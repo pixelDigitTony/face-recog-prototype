@@ -1,3 +1,4 @@
+import { EvaluationPage } from './pages/EvaluationPage';
 import { FaceServicesContext } from './servicesContext';
 import { EnrollmentPage } from './pages/EnrollmentPage';
 import { ScanPage } from './pages/ScanPage';
@@ -12,4 +13,5 @@ export const featurePages = {
   scan: ScanPage,
   database: DatabasePage,
   settings: SettingsPage,
+  evaluate: EvaluationPage,
 };

@@ -1,11 +1,19 @@
 import { validateDatabase } from './databaseSchema';
 import { percentage } from '../recognition/matchPolicy';
 export function migrateDatabase(original, scope) {
-  if (![1, 2].includes(original.schemaVersion)) return validateDatabase(original, scope);
-  validateDatabase(original, scope, original.schemaVersion === 1 ? true : 2);
+  if (![1, 2, 3].includes(original.schemaVersion)) return validateDatabase(original, scope);
+  validateDatabase(original, scope, original.schemaVersion === 1 ? true : original.schemaVersion);
   const db = structuredClone(original);
-  db.schemaVersion = 3;
-  db.identificationEvents = [];
+  db.schemaVersion = 4;
+  db.identificationEvents ||= [];
+  db.evaluationTrials = [];
+  for (const person of db.people) {
+    person.primaryTemplateId = person.activeTemplateId;
+    delete person.activeTemplateId;
+    person.enrollmentRevision =
+      db.templates.find((t) => t.id === person.primaryTemplateId)?.version ?? 0;
+  }
+  for (const template of db.templates) template.label = 'Original sample';
   db.revision++;
   db.updatedAt = new Date().toISOString();
   if (original.schemaVersion === 1) {

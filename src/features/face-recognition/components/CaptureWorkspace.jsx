@@ -37,7 +37,7 @@ export function CaptureWorkspace({ purpose }) {
   const imageRef = useRef(null),
     mode = purpose === 'enroll' ? 'enroll' : 'verify',
     isEnrollment = mode === 'enroll';
-  const people = state.database?.people.filter((p) => isEnrollment || p.activeTemplateId) ?? [];
+  const people = state.database?.people.filter((p) => isEnrollment || p.primaryTemplateId) ?? [];
   const person = people.find((p) => p.id === selectedId) ?? null;
   const disabled = state.mode !== 'writable' || workflow.busy;
   useEffect(
@@ -166,6 +166,8 @@ export function CaptureWorkspace({ purpose }) {
                 disabled ||
                 !person ||
                 !person.acknowledgedAt ||
+                (isEnrollment &&
+                  state.database.templates.filter((t) => t.personId === person.id).length >= 5) ||
                 models.status !== 'ready' ||
                 (!camera.active && !image) ||
                 Boolean(workflow.result && !workflow.result.persisted)
@@ -188,14 +190,14 @@ export function CaptureWorkspace({ purpose }) {
               {workflow.busy
                 ? 'Processing…'
                 : isEnrollment
-                  ? person?.activeTemplateId
-                    ? 'Replace enrollment'
+                  ? person?.primaryTemplateId
+                    ? 'Add diagnostic sample'
                     : 'Capture & enroll'
                   : 'Scan face'}
             </Button>
-            {person?.activeTemplateId && isEnrollment && (
+            {person?.primaryTemplateId && isEnrollment && (
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                A saved capture will replace this person’s active template.
+                Adds a diagnostic-only sample, preserving previous samples. Five samples maximum.
               </Typography>
             )}
           </CardContent>

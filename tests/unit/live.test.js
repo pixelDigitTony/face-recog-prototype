@@ -134,7 +134,8 @@ describe('tracking and migration', () => {
       displayName: 'Legacy Person',
       employeeCode: '1',
       normalizedEmployeeCode: '1',
-      activeTemplateId: null,
+      enrollmentRevision: 1,
+      primaryTemplateId: null,
     });
     old.attempts.push({
       id: 'old',
@@ -152,7 +153,7 @@ describe('tracking and migration', () => {
     });
     const before = JSON.stringify(old);
     const next = migrateDatabase(old, scope);
-    expect(next.schemaVersion).toBe(3);
+    expect(next.schemaVersion).toBe(4);
     expect(next.settings.matchThreshold).toBe(0.85);
     expect(next.attempts[0]).toMatchObject({
       outcome: 'MATCH',
@@ -193,7 +194,8 @@ describe('tracking and migration', () => {
       displayName: 'Person',
       employeeCode: '1',
       normalizedEmployeeCode: '1',
-      activeTemplateId: null,
+      enrollmentRevision: 1,
+      primaryTemplateId: null,
     });
     db.attempts.push({
       id: 'a',
@@ -258,13 +260,15 @@ async function liveHarness({ recognitionMs = 0, poseMs = 0, purpose = 'verify' }
     id: 't',
     personId: 'p',
     companyId: 'company',
+    label: 'Original sample',
     version: 1,
     modelIdentity: manifest,
     preprocessingVersion: 'v1',
     embedding,
     enrollmentSource: 'live_camera',
   });
-  db.people[0].activeTemplateId = 't';
+  db.people[0].primaryTemplateId = 't';
+  db.people[0].enrollmentRevision = 1;
   raw = JSON.stringify(db);
   await repo.refresh();
   const engine = {

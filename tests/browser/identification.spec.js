@@ -115,7 +115,8 @@ test('automatic multi-person identification uses real models without selection o
         displayName: `Fixture ${index}`,
         employeeCode: `AUTO-${index}`,
         normalizedEmployeeCode: `auto-${index}`,
-        activeTemplateId: `t${index}`,
+        enrollmentRevision: 1,
+        primaryTemplateId: `t${index}`,
         createdAt: new Date().toISOString(),
       });
       db.templates.push({
@@ -123,6 +124,7 @@ test('automatic multi-person identification uses real models without selection o
         personId: `p${index}`,
         companyId: db.scope.companyId,
         storeId: null,
+        label: 'Original sample',
         version: 1,
         embedding: extracted.embedding,
         modelIdentity: extracted.modelIdentity,

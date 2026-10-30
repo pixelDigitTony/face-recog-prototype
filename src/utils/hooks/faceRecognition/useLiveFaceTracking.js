@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useFaceServices } from './useLocalDatabase';
 import { useCamera } from './useCamera';
 import { createFrameScheduler } from './recognition/frameScheduler';
-export function useLiveFaceTracking(personId, purpose) {
+export function useLiveFaceTracking(personId, purpose, replaceTemplateId = null, sampleLabel = '') {
   const { liveWorkflow: live, engine, liveness } = useFaceServices(),
     camera = useCamera();
   const state = useSyncExternalStore(live.subscribe, live.getSnapshot, live.getSnapshot);
@@ -28,7 +28,7 @@ export function useLiveFaceTracking(personId, purpose) {
     try {
       await scheduler.current?.stop();
       if (token !== generation.current) return;
-      await live.start({ personId, purpose });
+      await live.start({ personId, purpose, replaceTemplateId, sampleLabel });
       if (token !== generation.current) return;
       if (!cameraRef.current.active) await cameraRef.current.start();
       if (token !== generation.current) {
@@ -74,7 +74,7 @@ export function useLiveFaceTracking(personId, purpose) {
     };
     // A new selected identity invalidates the camera session and all evidence.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [personId, purpose, live]);
+  }, [personId, purpose, replaceTemplateId, live]);
   useEffect(() => {
     if (camera.error) {
       stop();

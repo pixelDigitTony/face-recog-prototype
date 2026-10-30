@@ -70,7 +70,7 @@ describe('face workflow', () => {
     expect(match.livenessStatus).toBe('not_checked');
     expect(match.persisted).toBe(true);
   });
-  it('keeps a previous enrollment intact after failed replacement and retries without inference', async () => {
+  it('keeps previous samples intact after a failed addition and retries without inference', async () => {
     const h = await setup();
     await h.workflow.enroll({ personId: 'person', capture: h.capture });
     const old = h.repository.getSnapshot().database.templates[0];
@@ -84,7 +84,7 @@ describe('face workflow', () => {
     expect(retry.persisted).toBe(true);
     expect(retry.attemptId).toBe(result.attemptId);
     expect(h.engine.extract).toHaveBeenCalledTimes(calls);
-    expect(h.repository.getSnapshot().database.templates[0].version).toBe(2);
+    expect(h.repository.getSnapshot().database.templates[1].version).toBe(2);
   });
   it('saves non-match probe vectors and a frozen threshold', async () => {
     const h = await setup();

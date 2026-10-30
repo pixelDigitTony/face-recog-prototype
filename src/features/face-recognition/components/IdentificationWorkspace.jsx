@@ -67,7 +67,7 @@ export function IdentificationWorkspace() {
               <Chip
                 label={
                   live.gallery
-                    ? `${live.gallery.eligibleCount} eligible enrollments`
+                    ? `${live.gallery.eligibleCount} eligible enrollments · ${live.gallery.eligibleSampleCount} samples`
                     : 'Enrollments checked when scanning starts'
                 }
               />

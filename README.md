@@ -2,6 +2,14 @@
 
 A standalone React JavaScript + MUI prototype for browser-local YuNet/SFace face recognition. Enrollment, verification, settings, people, templates, probe embeddings and capture history stay in localStorage. No application server or database service is required.
 
+## Multiple appearances and evaluation
+
+Enroll retains up to five samples per person. Add face samples across days, such as with/without makeup or glasses; label, replace, delete and choose a primary sample individually. Each camera sample retains the enrollment challenge. Scan compares against every eligible sample and ranks each person by their best score. Changing the winning sample does not reset the person's stability window. Once confirmed, tracking continues without repeated SFace comparisons while its supporting references remain valid.
+
+**Evaluate recognition** collects fresh, manually labeled webcam trials for known and unenrolled participants. It compares primary-only and all-sample recognition, shows independent error categories and denominators, and explores 20–95% thresholds. The live 85% threshold stays fixed. Reports are marked outdated when references change; explicitly rerun compatible saved probes. Evaluation never creates enrollments or attendance/identification events. Full reference/video frames are not retained.
+
+See [the multi-sample specification](docs/ANTHONYS_FACE_LAB_MULTI_SAMPLE_EVALUATION_SPEC.md). Physical-camera and held-out participant evaluation remain necessary before choosing a different threshold.
+
 ## Run
 
 Use Node.js 20.20+ or a current supported LTS release, and npm. Dependencies and verified model assets are already present in this working copy.
@@ -24,9 +32,13 @@ npm.cmd run dev
 ## Try it
 
 1. On **Enroll**, click **+**, enter an employee code and name, acknowledge browser storage, and save the person.
+
 2. Click **Start live scan**. Keep one face visible, look straight ahead, then follow the randomized left/right head-turn and return prompts. After basic liveness passes, click **Capture & enroll** (or explicitly replace an enrollment).
+
 3. On **Scan face**, click **Start scanning**. Each face shows its own closest enrolled record, stored thumbnail and similarity. Amber means unconfirmed, below 85%, ambiguous or conflicting. Three consistent comparisons **at least 85%**, with a unique winner and a 0.05 raw-score separation from the runner-up, turn that face green. Exactly 85% qualifies. Closest suggestions below threshold remain Unknown in history. Scanning continues automatically and suppresses duplicate rows.
+
 4. Open **Local database** to inspect People, Templates, Captures, and Settings/Metadata. Each **View** dialog exposes the full stored record, including numeric face embeddings.
+
 5. Use **Settings** to change thumbnail retention. Scan uses raw cosine >= 0.85 with stability/uniqueness; enrollment consistency retains > 0.85. **Export JSON** includes the entire database. Deletion and reset always require an explicit action.
 
 **Use test image** opens the diagnostic capture flow. It runs the real models, displays similarity and saves diagnostic records, but cannot complete liveness or produce a live match. Image-created templates are excluded from live verification. Fixtures under `tests/fixtures/` are never automatically seeded into localStorage.
@@ -45,26 +57,36 @@ Camera access needs localhost or HTTPS. Model loading is explicit and may take l
 
 The initial key is `stk:face-prototype:v1:standalone:stk-prototype:db`. The repository commits one validated JSON envelope per operation. An exclusive Web Lock allows one writer tab; other tabs observe data in read-only mode. Close the writer and reload another tab to take over.
 
-Limits are 50 people, 200 combined capture/identification history records, and a conservative 3 MiB estimated storage budget. The first reached limit blocks additions; there is no automatic eviction. A failed write leaves prior data intact and keeps the new result explicitly unsaved. **Retry save** reuses the same event ID without repeating inference. An unsaved result is lost on reload or navigation.
+Limits are 50 people, five samples per person, 100 evaluation trials, 200 combined capture/identification history records, and a conservative 3 MiB estimated storage budget. The first reached limit blocks additions; there is no automatic eviction. A failed write leaves prior data intact and keeps the new result explicitly unsaved. **Retry save** reuses the same event ID without repeating inference. An unsaved result is lost on reload or navigation.
 
 Retained thumbnails are at most 96 × 96 JPEG and 4,096 characters. Embeddings contain 128 normalized numeric values. Full video and source frames are not retained. Corrupt or unsupported data is preserved for download; recovery never silently resets the database. Reset touches only the prototype's scoped key.
 
-Schema 1/2 migrates atomically to schema 3 under the existing writer lock and key. Historical scores, outcomes and threshold snapshots remain unchanged; old templates show that enrollment liveness was not checked. Historical identification v1 uses >85%; new identification v2 uses >=85%. Export before upgrading when you need a backup. Failed migration preserves original data for recovery.
+Schema 1/2/3 migrates atomically to schema 4 under the existing writer lock and key. Historical scores, outcomes and threshold snapshots remain unchanged; old templates show that enrollment liveness was not checked. Historical identification v1 uses >85%; historical v2 uses >=85%; new v3 uses >=85% with person-level multi-sample ranking. Export before upgrading when you need a backup. Failed migration preserves original data for recovery.
 
 This is a local test database accessible to scripts on the same origin. Results remain non-authoritative. MediaPipe landmarks support a **basic randomized motion challenge**, not validated passive anti-spoofing. Photo/video replay, masks and virtual-camera injection remain unvalidated. Similarity percentage is a raw score conversion, not identity probability; 0.85 is much stricter than the former experimental 0.363 threshold. Target-user/camera calibration and production STK authorization remain separate acceptance work.
 
 ## Architecture and STK integration
 
 ```text
+
 src/app/                              Standalone shell, theme composition and routing
+
 src/features/face-recognition/        Public feature entry, contracts, pages and UI
+
 src/components/dialogs/faceRecognition/  Dialogs following STK placement rules
+
 src/utils/hooks/faceRecognition/      Hooks, workflows, persistence and image helpers
+
 src/workers/                         Worker entry for OpenCV.js and ONNX Runtime
+
 src/theme/                           MUI theme tokens and component defaults
+
 public/models/                       Verified ONNX weights and manifest
+
 public/runtime/                      Pinned local OpenCV.js / ONNX WASM assets
+
 tests/                               Unit, browser and native-reference fixtures
+
 ```
 
 `features/face-recognition/index.js` is the public boundary. The module has no root router or theme provider. A host can inject services and mount the exported screens under its existing providers:
@@ -73,6 +95,7 @@ tests/                               Unit, browser and native-reference fixtures
 import { FaceRecognitionModule, EnrollmentPage } from './features/face-recognition';
 
 // Inside the existing STK theme and router:
+
 <FaceRecognitionModule services={services}>
   <EnrollmentPage />
 </FaceRecognitionModule>;

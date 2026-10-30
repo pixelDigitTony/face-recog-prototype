@@ -1,3 +1,4 @@
+import { createEvaluationWorkflow } from './workflows/evaluationWorkflow';
 import { createLocalStorageRepository } from './repositories/localStorageRepository';
 import { createBrowserFaceEngine } from './recognition/browserFaceEngine';
 import { createFaceWorkflow } from './workflows/faceWorkflow';
@@ -20,6 +21,7 @@ export function createPrototypeServices({ context, baseUrl, repository, engine }
     liveness,
     liveWorkflow,
     identificationWorkflow,
+    evaluationWorkflow: createEvaluationWorkflow({ context, repository, engine }),
     dispose() {
       engine.dispose();
       liveWorkflow.stop();

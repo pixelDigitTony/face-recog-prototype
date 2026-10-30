@@ -1,9 +1,9 @@
 ' Implemented frontend prototype; acceptance evidence: IMPLEMENTATION.md.
 ' Companion: STK_FACE_RECOGNITION_PROTOTYPE_SPEC.md
-' Eight named diagrams: capture/enrollment baseline plus automatic identification.
+' Nine named diagrams: capture/enrollment baseline plus automatic identification.
 
 @startuml stk_face_prototype_components
-title STK face prototype - frontend component boundaries
+title Anthony's Face Lab - frontend component boundaries
 top to bottom direction
 skinparam componentStyle rectangle
 skinparam shadowing false
@@ -15,7 +15,7 @@ cloud "Static asset host / localhost" as Assets {
 
 node "Browser - prototype origin" as Browser {
   component "Standalone React JS shell\nMUI theme and React Router" as Shell
-  component "Face recognition feature\nEnroll / Scan / Database / Settings" as Feature
+  component "Face recognition feature\nEnroll / Scan / Evaluate / Database / Settings" as Feature
   component "FaceWorkflow" as WorkflowPort <<interface>>
   component "BrowserFaceWorkflow\nenroll / verify / delete" as Workflow
   component "PrototypeRepository" as RepositoryPort <<interface>>
@@ -85,13 +85,13 @@ end note
 @enduml
 
 @startuml stk_face_prototype_domain
-title STK face prototype - localStorage domain model
+title Anthony's Face Lab - localStorage domain model
 hide methods
 skinparam classAttributeIconSize 0
 skinparam shadowing false
 
 class PrototypeDatabase {
-  schemaVersion : integer = 3
+  schemaVersion : integer = 4
   databaseId : UUID
   revision : integer
   createdAt : UTC timestamp
@@ -108,9 +108,23 @@ class Person {
   displayName : string
   department : string or null
   acknowledgedAt : UTC timestamp or null
-  activeTemplateId : UUID or null
+  primaryTemplateId : UUID or null
+  enrollmentRevision : monotonic integer
   createdAt / updatedAt : UTC timestamps
 }
+
+class EvaluationTrial {
+  id : UUID
+  personId : UUID or null (manual ground truth)
+  participantLabel / notes : strings
+  observations : 3 fresh embeddings or empty on failure
+  modelIdentity / preprocessingVersion : snapshot
+  galleryVersion : SHA256
+  policy : evaluation-multisample-v1
+  report : primary/all summary at 85 percent
+}
+PrototypeDatabase "1" *-- "0..100" EvaluationTrial
+Person "0..1" -- "0..*" EvaluationTrial : manually labeled trials
 
 class IdentificationEvent {
   id / sessionId / encounterId : UUID
@@ -121,13 +135,14 @@ class IdentificationEvent {
   galleryVersion : SHA256
   similarity / runnerUpSimilarity / margin : raw scores
   samples : exactly 3 bounded observations
-  decisionPolicyVersion : identify-85-strict-v1
+  decisionPolicyVersion : identify-85-multisample-v3
   livenessStatus : not_checked
   authoritative : false
   probeEmbedding / thumbnailDataUrl : null
 }
 
 class FaceTemplate {
+  label : editable string (max 60)
   id / personId : UUID
   companyId / storeId : scope
   version : integer
@@ -199,12 +214,12 @@ enum Outcome {
 }
 
 PrototypeDatabase "1" *-- "0..50" Person
-PrototypeDatabase "1" *-- "0..50" FaceTemplate
+PrototypeDatabase "1" *-- "0..250" FaceTemplate
 PrototypeDatabase "1" *-- "0..200" CaptureAttempt
 PrototypeDatabase "1" *-- "0..200" IdentificationEvent
 Person "0..1" -- "0..*" IdentificationEvent : identified history only
 PrototypeDatabase "1" *-- "1" Settings
-Person "1" -- "0..1" FaceTemplate : active enrollment
+Person "1" -- "0..5" FaceTemplate : reference samples
 Person "1" -- "0..*" CaptureAttempt : capture history
 FaceTemplate *-- ModelIdentity : snapshot
 CaptureAttempt *-- "0..1" ModelIdentity : snapshot
@@ -226,7 +241,7 @@ end note
 @enduml
 
 @startuml stk_face_prototype_enrollment
-title STK face prototype - enrollment and replacement
+title Anthony's Face Lab - enrollment and replacement
 autonumber
 skinparam shadowing false
 actor Tester
@@ -241,7 +256,7 @@ note over UI, Repo
   Existing test person and acknowledgement are saved.
   Camera/models are ready; this tab owns the writer lock.
 end note
-Tester -> UI : Capture enrollment / Replace template
+Tester -> UI : Add face sample / Replace selected sample
 UI -> Camera : capture original unmirrored frame
 Camera --> UI : frame or capture error
 UI -> Flow : enroll(personId, scope, frame/error, attemptId)
@@ -257,7 +272,7 @@ end
 
 alt usable embedding and exactly one face
   Flow -> Flow : prepare new template + ENROLLED attempt
-  Flow -> Repo : commit(template + person link + attempt)
+  Flow -> Repo : commit(add or replace selected sample + revision + attempt)
 else processing rejected or failed
   Flow -> Repo : commit(failed enrollment attempt only)
 end
@@ -290,7 +305,7 @@ end note
 @enduml
 
 @startuml stk_face_prototype_verification
-title STK face prototype - 1:1 verification and saved table rows
+title Anthony's Face Lab - 1:1 verification and saved table rows
 autonumber
 skinparam shadowing false
 actor Tester
@@ -448,7 +463,7 @@ end note
 @enduml
 
 @startuml stk_face_prototype_capture_states
-title STK face prototype - capture and persistence states
+title Anthony's Face Lab - capture and persistence states
 skinparam shadowing false
 
 state "Initialize models and database" as Initializing
@@ -519,10 +534,10 @@ participant "Scan UI / camera" as UI
 participant "Identification coordinator" as Scan
 participant "YuNet / SFace worker" as Worker
 participant "Per-track windows" as Tracks
-database "localStorage schema 3" as DB
+database "localStorage schema 4" as DB
 Tester -> UI : Start scanning; no selected identity
 UI -> Scan : start current scope
-Scan -> DB : load and atomically migrate v1/v2
+Scan -> DB : load and atomically migrate v1/v2/v3
 Scan -> Worker : initialize recognition; setGallery(content hash)
 loop one pipeline at a time until Stop / hide / error
   UI -> Scan : unmirrored frame + capture time
@@ -534,7 +549,7 @@ loop one pipeline at a time until Stop / hide / error
   Scan -> DB : resolve active candidate name and stored thumbnail
   DB --> Scan : current person/template snapshot or no candidate
   Scan --> UI : per-face closest record/photo; amber if unconfirmed
-  Scan -> Tracks : same winner + >=85% + unique / margin >=0.05
+  Scan -> Tracks : same person (sample may change) + >=85% + unique / margin >=0.05
   Tracks --> Scan : 3 fresh samples spanning >=600ms
   Scan --> UI : green only after acceptance; amber for ambiguity/conflict
   opt newly accepted unique identity
@@ -544,7 +559,7 @@ loop one pipeline at a time until Stop / hide / error
     Scan --> UI : per-face Low light / Overexposed / Uneven lighting
   end
   opt new deduplicated encounter outcome
-    Scan -> DB : validate exact gallery; v2 inclusive event without preview/photo
+    Scan -> DB : validate exact gallery; v3 multi-sample event without preview/photo
     DB --> Scan : Saved locally or immutable unsaved event
   end
   Scan -> Worker : releaseFrame(frameId)
@@ -556,11 +571,50 @@ note over Scan, DB
   One unsaved event pauses identification until retry/discard.
   History writes do not change gallery version.
   Candidate photos remain on main thread; never worker gallery/hash.
-  Historical v1 events keep >85%; new v2 events use >=85%.
+  Historical v1/v2 keep original rules; new v3 groups samples by person.
   Lighting feedback never changes challenge progress or match gates.
   Confirmed tracks use geometry until disappearance / lost association.
   Quality alone does not release a continuous confirmed face.
   New competing tracks cannot revoke a confirmed owner.
-  Invalidating its active enrollment clears confirmation.
+  Invalidating any supporting sample clears confirmation.
 end note
+@enduml
+
+@startuml anthonys_face_lab_evaluation
+ title Anthony's Face Lab - independent evaluation and sample migration
+ skinparam shadowing false
+ actor Tester
+ participant "Evaluate UI / camera" as UI
+ participant "Evaluation workflow" as Eval
+ participant "YuNet / SFace worker" as Engine
+ participant "Person ranking / stability replay" as Policy
+ database "localStorage schema 4" as DB
+ Tester -> UI : label actual enrollee or Not enrolled participant
+ UI -> Eval : Start fresh trial
+ Eval -> DB : load compatible gallery and primary selection
+ Eval -> Engine : analyze 3 fresh frames; single tracked face
+ Engine --> Eval : embeddings, quality, timestamps
+ alt complete trial with continuity
+   Eval -> Policy : primary-only and all-sample ranking
+   Policy -> Policy : max sample score per person; distinct-person margin
+   Policy --> Eval : summary outcomes at 85 percent
+ else invalid / cancelled capture
+   Eval -> Eval : failure reason; discard partial embeddings
+ end
+ Eval -> DB : commit separate evaluation trial; cap 100 / shared 3 MiB
+ DB --> UI : saved trial; never enrollment or identification event
+ UI -> Policy : derive experimental 20..95 percent table from saved probes
+ note over UI, Policy
+   Experimental thresholds cannot modify Scan's 85 percent boundary.
+   Reports become outdated when gallery/primary selections change.
+   Explicit rerun uses compatible held-out probes against current gallery.
+ end note
+ Tester -> UI : Rerun against current gallery
+ UI -> Eval : recompute paired results explicitly
+ Eval -> DB : update report snapshots; keep manual truth and original captures
+ note over DB
+   v1/v2/v3 migrate atomically to v4 under existing writer lock/key.
+   Original active template becomes the primary sample.
+   Preserve IDs, vectors and old policy evidence; no automatic eviction.
+ end note
 @enduml

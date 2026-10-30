@@ -1,5 +1,19 @@
 # Implementation and validation record
 
+## Multiple appearance samples and evaluation — 2026-10-30
+
+Implemented the approved [multi-sample/evaluation specification](ANTHONYS_FACE_LAB_MULTI_SAMPLE_EVALUATION_SPEC.md). Enroll now supports up to five labeled reference samples per person, individual replacement/deletion and primary selection. It retains the existing camera challenge and completed-progress behavior; a new appearance need not meet 85% against an older sample. Diagnostic additions preserve prior samples and remain excluded from live Scan.
+
+Schema 4 migrates schemas 1/2/3 under the existing writer lock and storage key, preserving IDs, vectors and historical policies. Person revisions guard sample mutations, limits and retries. Scan ranks distinct people by their best eligible sample, preserves stability when the supporting sample changes and records each supporting template under `identify-85-multisample-v3`. It keeps the requested inclusive 85% boundary, distinct-person margin, duplicate-identity checks and confirm-once tracking. Replacing/removing supporting templates invalidates a confirmation; unrelated sample/primary/display edits preserve it.
+
+The new `/evaluate` page captures fresh manually labeled three-observation webcam trials independently of enrollment/history. It compares primary-only versus all-sample results, separates missed/wrong-person/unenrolled outcomes and derives experimental 20–95% threshold tables from saved probes. Reports become outdated when the gallery/primary changes; explicit reruns require compatible models. Evaluation stores compact 85% summaries, not redundant threshold matrices, within the shared 3 MiB budget and 100-trial cap. Sample thumbnails remain associated with the actual winning reference on every face. Mobile navigation now scrolls without overlapping link text.
+
+Validation: **131 unit tests passed**. Coverage includes migration, per-person ranking, changing supporting references, old policy compatibility, five-sample/100-trial limits, stale revisions, quota preservation/retry, fresh evaluation capture, failed/stalled trials and independent error categories. A synthetic 250-reference fixture measured about **1.07 ms/probe** over 30 rankings on this machine; this excludes model inference and is not a device or population benchmark.
+
+The full development Chrome suite passed **16 tests** before the final navigation/diagnostic-label/preview polish. On the final production bundle, Chrome passed **11 tests (37.6 s)** with **5 development-only cases skipped**. Those cases passed in development. Production checks include desktop/mobile sample management, evaluation/reload/rerun, alternative-sample recognition, per-face labels, no overlapping mobile navigation, original real-model diagnostic flow, storage recovery and camera cleanup. Desktop/mobile evaluation screenshots were inspected. Unit tests, production build, full formatting, patch checks and all nine PlantUML diagrams passed. The existing Vite large-chunk advisory remains nonfatal.
+
+No deployment or production-company changes were made. Physical-camera testing across makeup/no makeup, lighting, glasses, different people, face crossings and target devices remains necessary; local fixture results do not establish genuine recognition accuracy or justify a lower live threshold.
+
 ## Anthony's Face Lab branding — 2026-10-30
 
 Renamed the desktop sidebar and shared desktop/mobile header to **Anthony's Face Lab**, using one app-name constant. Updated the browser title/description, workspace footer, normal/recovery JSON filenames, private package metadata/lockfile and README title. Removed the internal storage key from the visible database footer. Retained existing storage keys, scope identifiers and raw diagnostic/export record values for compatibility, so the branding change does not hide or orphan enrollments/history; historical integration documents keep their original references.

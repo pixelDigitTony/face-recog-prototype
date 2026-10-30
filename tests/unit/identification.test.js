@@ -44,13 +44,15 @@ function database() {
       employeeCode: `E${i}`,
       normalizedEmployeeCode: `e${i}`,
       displayName: `Person ${i}`,
-      activeTemplateId: `t${i}`,
+      enrollmentRevision: 1,
+      primaryTemplateId: `t${i}`,
     });
     db.templates.push({
       id: `t${i}`,
       personId: `p${i}`,
       companyId: 'c',
       storeId: null,
+      label: 'Original sample',
       version: 1,
       embedding: vector(i),
       modelIdentity: manifest,
@@ -546,9 +548,14 @@ describe('continuous identification and persistence', () => {
   it('migrates v2 on disk, retains records on reload, and deletes linked scan history only', async () => {
     const old = database();
     old.schemaVersion = 2;
+    old.people.forEach((p) => {
+      p.activeTemplateId = p.primaryTemplateId;
+      delete p.primaryTemplateId;
+      delete p.enrollmentRevision;
+    });
     delete old.identificationEvents;
     const h = await harness(old);
-    expect(JSON.parse(h.raw()).schemaVersion).toBe(3);
+    expect(JSON.parse(h.raw()).schemaVersion).toBe(4);
     for (let i = 0; i < 3; i++) await h.step();
     const readOnly = createLocalStorageRepository({
       context,
@@ -583,7 +590,8 @@ describe('continuous identification and persistence', () => {
         id: `p${i}`,
         employeeCode: `E${i}`,
         normalizedEmployeeCode: `e${i}`,
-        activeTemplateId: `t${i}`,
+        enrollmentRevision: 1,
+        primaryTemplateId: `t${i}`,
       });
       db.templates.push({
         ...db.templates[0],
@@ -690,6 +698,58 @@ describe('continuous identification and persistence', () => {
     for (let i = 0; i < 3; i++) await h.step();
     expect(h.events()).toHaveLength(1);
     expect(new Set(h.events().map((e) => e.encounterId)).size).toBe(1);
+    h.repo.dispose();
+  });
+});
+
+describe('multi-sample live confirmation', () => {
+  it('uses the actual summary sample, validates v3 evidence and retains confirmation across unused changes', async () => {
+    const db = database();
+    db.templates.push({
+      ...db.templates[0],
+      id: 'makeup',
+      version: 2,
+      label: 'Makeup',
+      embedding: vector(2),
+    });
+    const h = await harness(db);
+    h.setProbes([vector(0), vector(1)]);
+    await h.step();
+    h.setProbes([vector(2), vector(1)]);
+    await h.step();
+    await h.step();
+    const event = h.events()[0];
+    expect(event.samples.map((s) => s.templateId)).toEqual(['t0', 'makeup', 'makeup']);
+    expect(event.templateId).toBe('t0');
+    expect(event.eligibleCount).toBe(2);
+    expect(event.eligibleSampleCount).toBe(3);
+    expect(() => validateDatabase(h.repo.getSnapshot().database, context)).not.toThrow();
+    const before = h.engine.extractFaces.mock.calls.length;
+    await h.repo.commit({
+      type: 'setPrimarySample',
+      personId: 'p0',
+      templateId: 'makeup',
+      expectedEnrollmentRevision: 1,
+    });
+    await h.step();
+    expect(h.engine.extractFaces.mock.calls.length).toBe(before);
+    await h.repo.commit({
+      type: 'deleteSample',
+      personId: 'p0',
+      templateId: 'makeup',
+      expectedEnrollmentRevision: 2,
+    });
+    await h.step();
+    expect(h.flow.getSnapshot().faces[0].identification.tracked).toBe(false);
+    h.repo.dispose();
+  });
+  it('still loads the preceding inclusive-v2 policy without rewriting it', async () => {
+    const h = await harness();
+    for (let i = 0; i < 3; i++) await h.step();
+    const db = structuredClone(h.repo.getSnapshot().database);
+    db.identificationEvents[0].decisionPolicyVersion = 'identify-85-inclusive-v2';
+    delete db.identificationEvents[0].eligibleSampleCount;
+    expect(() => validateDatabase(db, context)).not.toThrow();
     h.repo.dispose();
   });
 });

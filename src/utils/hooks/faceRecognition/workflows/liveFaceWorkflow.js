@@ -76,8 +76,8 @@ export function createLiveFaceWorkflow({
     return (
       repository.getSnapshot().mode === 'writable' &&
       person &&
-      person.activeTemplateId === session.person.activeTemplateId &&
-      JSON.stringify(person) === JSON.stringify(session.person)
+      person.enrollmentRevision === session.person.enrollmentRevision &&
+      person.acknowledgedAt === session.person.acknowledgedAt
     );
   }
   function canEnroll() {
@@ -124,7 +124,10 @@ export function createLiveFaceWorkflow({
         },
         similarity: score,
         sessionId: session.id,
-        expectedTemplateId: session.person.activeTemplateId,
+        expectedTemplateId: session.person.primaryTemplateId,
+        expectedEnrollmentRevision: session.person.enrollmentRevision,
+        replaceTemplateId: session.replaceTemplateId,
+        sampleLabel: session.sampleLabel,
         liveness: {
           ...live,
           method: 'active_head_turn_v1',
@@ -158,7 +161,7 @@ export function createLiveFaceWorkflow({
       return () => listeners.delete(fn);
     },
     getSnapshot: () => state,
-    async start({ personId, purpose = 'verify' }) {
+    async start({ personId, purpose = 'verify', replaceTemplateId = null, sampleLabel = '' }) {
       if (processing) throw new Error('Previous analysis is finishing. Try again.');
       generation++;
       session = null;
@@ -183,6 +186,13 @@ export function createLiveFaceWorkflow({
         person = db.people.find((p) => p.id === personId);
       if (personId && !person?.acknowledgedAt)
         throw new Error('Select a person with browser storage acknowledged.');
+      if (
+        purpose === 'enroll' &&
+        person &&
+        !replaceTemplateId &&
+        db.templates.filter((t) => t.personId === person.id).length >= 5
+      )
+        throw new Error('Five sample limit reached. Replace or delete a sample.');
       await engine.initialize();
       if (person) {
         try {
@@ -190,7 +200,7 @@ export function createLiveFaceWorkflow({
         } catch (error) {
           throw new Error(`Liveness unavailable: ${error.message}`);
         }
-        const template = db.templates.find((t) => t.id === person.activeTemplateId);
+        const template = db.templates.find((t) => t.id === person.primaryTemplateId);
         if (
           purpose === 'verify' &&
           (!compatibleTemplate(template, engine.manifest) ||
@@ -203,6 +213,8 @@ export function createLiveFaceWorkflow({
         session = {
           id: crypto.randomUUID(),
           purpose,
+          replaceTemplateId,
+          sampleLabel,
           person: structuredClone(person),
           template: structuredClone(template),
           settings: { ...db.settings },

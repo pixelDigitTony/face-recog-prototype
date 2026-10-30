@@ -4,3 +4,5 @@ export { ScanPage } from './pages/ScanPage';
 export { DatabasePage } from './pages/DatabasePage';
 export { SettingsPage } from './pages/SettingsPage';
 export { createPrototypeServices } from '@/utils/hooks/faceRecognition/createPrototypeServices';
+
+export { EvaluationPage } from './pages/EvaluationPage';

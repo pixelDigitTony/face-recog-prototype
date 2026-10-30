@@ -135,8 +135,9 @@ export function SettingsPage() {
               </Typography>
               <StorageUsage state={state} />
               <Typography variant="body2" color="text.secondary" sx={{ my: 2 }}>
-                Up to 50 people and 200 combined captures and identification scans, within a 3 MB
-                estimated storage budget. Records are never automatically removed.
+                Up to 50 people, five samples per person, 200 combined captures and identification
+                scans, and 100 evaluation trials, within a 3 MB estimated storage budget. Records
+                are never automatically removed.
               </Typography>
               <Button
                 color="error"

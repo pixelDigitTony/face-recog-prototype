@@ -106,13 +106,15 @@ test('each tracked face shows its own closest photo, inclusive green state and a
         companyId: db.scope.companyId,
         storeId: null,
         acknowledgedAt: new Date().toISOString(),
-        activeTemplateId: `t${i}`,
+        enrollmentRevision: 1,
+        primaryTemplateId: `t${i}`,
       });
       db.templates.push({
         id: `t${i}`,
         personId: `p${i}`,
         companyId: db.scope.companyId,
         storeId: null,
+        label: 'Original sample',
         version: 1,
         embedding: Array.from({ length: 128 }, (_, n) => (n === i ? 1 : 0)),
         modelIdentity: manifest,
@@ -238,6 +240,6 @@ test('each tracked face shows its own closest photo, inclusive green state and a
     0.85, 0.85,
   ]);
   expect(JSON.stringify(events)).not.toContain('closestCandidate');
-  expect(events.every((e) => e.decisionPolicyVersion === 'identify-85-inclusive-v2')).toBe(true);
+  expect(events.every((e) => e.decisionPolicyVersion === 'identify-85-multisample-v3')).toBe(true);
   expect(errors).toEqual([]);
 });

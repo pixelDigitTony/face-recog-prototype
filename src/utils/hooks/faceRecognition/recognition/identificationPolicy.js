@@ -3,9 +3,10 @@ import { percentage } from './matchPolicy';
 import { LIVE_TIMING } from './liveTiming';
 
 export const LEGACY_IDENTIFICATION_POLICY = 'identify-85-strict-v1';
-export const IDENTIFICATION_POLICY = 'identify-85-inclusive-v2';
+export const PREVIOUS_IDENTIFICATION_POLICY = 'identify-85-inclusive-v2';
+export const IDENTIFICATION_POLICY = 'identify-85-multisample-v3';
 export const identificationOperator = (policy) => {
-  if (policy === IDENTIFICATION_POLICY) return '>=';
+  if ([IDENTIFICATION_POLICY, PREVIOUS_IDENTIFICATION_POLICY].includes(policy)) return '>=';
   if (policy === LEGACY_IDENTIFICATION_POLICY) return '>';
   throw new Error('Unknown identification policy.');
 };
@@ -29,15 +30,34 @@ export function classifyRanking(
     ? 'IDENTIFIED'
     : 'AMBIGUOUS';
 }
-export function rankEmbedding(embedding, entries) {
-  if (!entries.length) return null;
-  const ranked = entries
-    .map((entry) => ({ entry, score: cosineSimilarity(embedding, entry.embedding) }))
-    .sort((a, b) => b.score - a.score || a.entry.personId.localeCompare(b.entry.personId));
+export function rankEmbedding(embedding, entries, threshold = 0.85) {
+  return rankScores(
+    entries.map((entry) => ({ entry, score: cosineSimilarity(embedding, entry.embedding) })),
+    threshold,
+  );
+}
+export function rankScores(input, threshold = 0.85) {
+  if (!input.length) return null;
+  const scored = [...input].sort(
+    (a, b) =>
+      b.score - a.score ||
+      a.entry.personId.localeCompare(b.entry.personId) ||
+      a.entry.templateId.localeCompare(b.entry.templateId),
+  );
+  const winners = new Map();
+  for (const result of scored)
+    if (!winners.has(result.entry.personId)) winners.set(result.entry.personId, result);
+  const ranked = [...winners.values()];
   const { entry, score } = ranked[0],
     runnerUpSimilarity = ranked[1]?.score ?? null;
-  const aboveThresholdCount = ranked.filter((r) => identificationPassed(r.score)).length;
-  const classification = classifyRanking(score, runnerUpSimilarity, aboveThresholdCount);
+  const aboveThresholdCount = ranked.filter((r) => r.score >= threshold).length;
+  const classification =
+    score < threshold
+      ? 'UNKNOWN'
+      : aboveThresholdCount === 1 &&
+          (runnerUpSimilarity === null || score - runnerUpSimilarity >= MIN_MARGIN)
+        ? 'IDENTIFIED'
+        : 'AMBIGUOUS';
   return {
     classification,
     similarity: score,
@@ -64,13 +84,7 @@ export function createIdentificationWindow() {
       binding = null;
     },
     observe(result, timestamp, contextKey) {
-      const key = JSON.stringify([
-        contextKey,
-        result.classification,
-        result.personId,
-        result.templateId,
-        result.templateVersion,
-      ]);
+      const key = JSON.stringify([contextKey, result.classification, result.personId]);
       const prior = samples.at(-1);
       if (prior && timestamp <= prior.timestamp) return null;
       if (

@@ -1,5 +1,7 @@
 # STK per-face closest records, thumbnails and lighting feedback
 
+Current multi-sample behavior supersedes single-template assumptions: see [Anthony's Face Lab multi-sample specification](ANTHONYS_FACE_LAB_MULTI_SAMPLE_EVALUATION_SPEC.md). Scan now uses `identify-85-multisample-v3`; historical policies retain their original rules.
+
 Status: **Implemented locally — see IMPLEMENTATION.md for validation and remaining physical-camera acceptance.**
 Date: 2026-10-30 (Asia/Manila).  
 Project: `C:\Users\USER\projects\Starwinner\face-recog-prototype`.  

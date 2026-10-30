@@ -51,13 +51,17 @@ export function DatabasePage() {
           { key: 'displayName', label: 'Name' },
           { key: 'department', label: 'Department' },
           {
-            key: 'activeTemplateId',
+            key: 'primaryTemplateId',
             label: 'Enrollment',
             render: (row) => (
               <Chip
                 size="small"
-                label={row.activeTemplateId ? 'Enrolled' : 'Not enrolled'}
-                color={row.activeTemplateId ? 'success' : 'default'}
+                label={
+                  row.primaryTemplateId
+                    ? `${db.templates.filter((t) => t.personId === row.id).length} samples`
+                    : 'Not enrolled'
+                }
+                color={row.primaryTemplateId ? 'success' : 'default'}
                 variant="outlined"
               />
             ),
@@ -71,6 +75,7 @@ export function DatabasePage() {
               label: 'Person',
               render: (row) => db.people.find((p) => p.id === row.personId)?.displayName,
             },
+            { key: 'label', label: 'Sample label' },
             { key: 'version', label: 'Version' },
             { key: 'modelIdentity', label: 'Model', render: () => 'SFace · 128 values' },
             {

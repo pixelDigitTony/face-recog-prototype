@@ -76,6 +76,7 @@ export function ClosestRecord({ identification, compact = false }) {
             {displayName} ({employeeCode})
           </Box>
         )}
+        {candidate.sampleLabel && <Box>{candidate.sampleLabel}</Box>}
         {!recognized && <Box>{status}</Box>}
         {recognized && identification.tracked && <Box>Tracking confirmed face</Box>}
       </Box>

@@ -27,6 +27,7 @@ const links = [
   ['/enroll', 'Enroll', PersonAddAltOutlinedIcon],
   ['/scan', 'Scan face', CenterFocusStrongOutlinedIcon],
   ['/database', 'Local database', StorageOutlinedIcon],
+  ['/evaluate', 'Evaluate recognition', TuneOutlinedIcon],
   ['/settings', 'Settings', TuneOutlinedIcon],
 ];
 export function App() {
@@ -165,7 +166,7 @@ export function App() {
               component={NavLink}
               to={path}
               size="small"
-              sx={{ whiteSpace: 'nowrap', '&.active': { bgcolor: '#edf4ea' } }}
+              sx={{ whiteSpace: 'nowrap', flexShrink: 0, '&.active': { bgcolor: '#edf4ea' } }}
             >
               {label}
             </Button>
