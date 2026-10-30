@@ -1,6 +1,13 @@
 import { List, ListItem, ListItemText, Typography } from '@mui/material';
 import { formatPercentage } from '@/utils/hooks/faceRecognition/recognition/matchPolicy';
-export function DetectedFacesList({ faces, similarity, status, person, liveness }) {
+export function DetectedFacesList({
+  faces,
+  similarity,
+  status,
+  person,
+  liveness,
+  identification = false,
+}) {
   return (
     <>
       <Typography variant="h6">Detected faces ({faces.length})</Typography>
@@ -10,9 +17,11 @@ export function DetectedFacesList({ faces, similarity, status, person, liveness 
             <ListItemText
               primary={`Face #${face.trackId} · Detection confidence ${(face.confidence * 100).toFixed(1)}%`}
               secondary={
-                faces.length > 1
-                  ? 'Multiple faces — verification paused · Match: — · Liveness: not checked'
-                  : `${face.reasonCode?.replaceAll('_', ' ') || status.replaceAll('_', ' ')}${person ? ` · Verifying against ${person.displayName} (${person.employeeCode})` : ''} · Match: ${formatPercentage(similarity)} · Liveness: ${liveness.status.replaceAll('_', ' ')}`
+                identification
+                  ? `${face.identification.person ? `Recognized: ${face.identification.person.personSnapshot.displayName} (${face.identification.person.personSnapshot.employeeCode})` : ({ unknown: 'Unknown face', ambiguous: 'Ambiguous match', quality_blocked: 'Low image quality', waiting_for_analysis: 'Waiting for analysis', identity_conflict: 'Identity conflict' }[face.identification.status] ?? 'Searching')} · Match: ${formatPercentage(face.identification.similarity)}${face.identification.ageMs == null ? '' : ` · ${Math.round(face.identification.ageMs)} ms ago`}`
+                  : faces.length > 1
+                    ? 'Multiple faces — verification paused · Match: — · Liveness: not checked'
+                    : `${face.reasonCode?.replaceAll('_', ' ') || status.replaceAll('_', ' ')}${person ? ` · Verifying against ${person.displayName} (${person.employeeCode})` : ''} · Match: ${formatPercentage(similarity)} · Liveness: ${liveness.status.replaceAll('_', ' ')}`
               }
             />
           </ListItem>

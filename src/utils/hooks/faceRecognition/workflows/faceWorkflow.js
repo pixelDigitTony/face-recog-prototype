@@ -5,10 +5,12 @@ export function compatibleTemplate(template, manifest) {
   return Boolean(
     template &&
       manifest &&
-      template.modelIdentity.recognizer.sha256 === manifest.recognizer.sha256 &&
-      template.modelIdentity.detector.sha256 === manifest.detector.sha256 &&
+      template.modelIdentity?.recognizer?.sha256 &&
+      template.modelIdentity.recognizer.sha256 === manifest.recognizer?.sha256 &&
+      template.modelIdentity?.detector?.sha256 &&
+      template.modelIdentity.detector.sha256 === manifest.detector?.sha256 &&
       template.preprocessingVersion === manifest.preprocessingVersion &&
-      template.embedding.length === manifest.embeddingDimension,
+      template.embedding?.length === manifest.embeddingDimension,
   );
 }
 export function createFaceWorkflow({ repository, engine, context }) {

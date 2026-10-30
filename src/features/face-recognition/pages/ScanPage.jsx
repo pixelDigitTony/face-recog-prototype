@@ -1,4 +1,4 @@
-import { LiveScanWorkspace } from '../components/LiveScanWorkspace';
+import { IdentificationWorkspace } from '../components/IdentificationWorkspace';
 export function ScanPage() {
-  return <LiveScanWorkspace purpose="verify" />;
+  return <IdentificationWorkspace />;
 }

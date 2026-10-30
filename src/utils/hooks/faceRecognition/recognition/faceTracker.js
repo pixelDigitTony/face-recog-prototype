@@ -35,8 +35,16 @@ export function createFaceTracker() {
         ambiguous ||= Boolean(uncertain);
         const trackId = candidate && !uncertain ? candidate.t.trackId : nextId++;
         used.add(trackId);
-        return { ...face, trackId, seenAt: now };
+        return { ...face, trackId, seenAt: now, ambiguous: Boolean(uncertain) };
       });
+      // Invalidate both sides of a shared association, independent of detection order.
+      for (const face of current) {
+        if (face.ambiguous) {
+          for (const other of current) {
+            if (other !== face && boxIoU(face.box, other.box) > 0.2) other.ambiguous = true;
+          }
+        }
+      }
       tracks = [...current, ...previous.filter((t) => !used.has(t.trackId))];
       return { faces: current, ambiguous };
     },

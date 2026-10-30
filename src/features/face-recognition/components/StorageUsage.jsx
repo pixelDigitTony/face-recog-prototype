@@ -16,6 +16,11 @@ export function StorageUsage({ state }) {
         color={percentage >= 80 ? 'warning' : 'primary'}
         sx={{ height: 5, borderRadius: 3, bgcolor: '#dce6de' }}
       />
+      <Typography variant="caption" color="text.secondary">
+        {(state.database?.attempts.length ?? 0) +
+          (state.database?.identificationEvents?.length ?? 0)}{' '}
+        / 200 history records
+      </Typography>
     </Box>
   );
 }

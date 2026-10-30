@@ -1,7 +1,8 @@
 /**
  * @typedef {{environment:string, companyId:string, storeId:string|null}} FeatureContext
  * @typedef {{attemptId:string, outcome:string, persisted:boolean, authoritative:false, error?:string}} WorkflowResult
- * @typedef {{initialize:Function, extract:Function, analyzeFrame:Function, dispose:Function}} FaceEngine
+ * @typedef {{initialize:Function, extract:Function, analyzeFrame:Function, setGallery:Function, detectFrame:Function, extractFaces:Function, releaseFrame:Function, dispose:Function}} FaceEngine
+ * @typedef {{start:Function, process:Function, stale:Function, stop:Function, retry:Function, discard:Function, subscribe:Function, getSnapshot:Function}} IdentificationWorkflow
  * @typedef {{initialize:Function, observe:Function, dispose:Function}} LivenessEngine
  * @typedef {{start:Function, process:Function, stop:Function, enroll:Function, retry:Function, discard:Function, subscribe:Function, getSnapshot:Function}} LiveFaceWorkflow
  * @typedef {{load:Function, query:Function, commit:Function, exportJson:Function, reset:Function, subscribe:Function}} PrototypeRepository

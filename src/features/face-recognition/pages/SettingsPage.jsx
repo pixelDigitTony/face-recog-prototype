@@ -17,6 +17,7 @@ import { RecordDetailsDialog } from '@/components/dialogs/faceRecognition/Record
 import { StorageUsage } from '../components/StorageUsage';
 import { useModels } from '@/utils/hooks/faceRecognition/useModels';
 import { ModelStatus } from '../components/ModelStatus';
+import { CaptureWorkspace } from '../components/CaptureWorkspace';
 
 export function SettingsPage() {
   const { repository } = useFaceServices(),
@@ -26,7 +27,21 @@ export function SettingsPage() {
   const [error, setError] = useState(null),
     [success, setSuccess] = useState(false),
     [reset, setReset] = useState(false),
-    [details, setDetails] = useState(null);
+    [details, setDetails] = useState(null),
+    [diagnostic, setDiagnostic] = useState(false);
+  if (diagnostic)
+    return (
+      <>
+        <Button sx={{ mb: 2 }} onClick={() => setDiagnostic(false)}>
+          Return to settings
+        </Button>
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Diagnostic image comparison only. Images cannot produce live identification or pass
+          liveness.
+        </Alert>
+        <CaptureWorkspace purpose="verify" />
+      </>
+    );
   return (
     <>
       <Typography variant="overline" color="primary" fontWeight={700}>
@@ -83,7 +98,8 @@ export function SettingsPage() {
                   />
                   <Typography variant="caption" color="text.secondary">
                     Full video and full-resolution frames are not retained. Embeddings are saved
-                    with completed captures.
+                    with enrollment and diagnostic captures. Automatic identification stores score
+                    summaries only.
                   </Typography>
                   {error && <Alert severity="error">{error}</Alert>}
                   {success && <Alert severity="success">Settings saved.</Alert>}
@@ -119,8 +135,8 @@ export function SettingsPage() {
               </Typography>
               <StorageUsage state={state} />
               <Typography variant="body2" color="text.secondary" sx={{ my: 2 }}>
-                Up to 50 people and 200 captures, within a 3 MB estimated storage budget. Records
-                are never automatically removed.
+                Up to 50 people and 200 combined captures and identification scans, within a 3 MB
+                estimated storage budget. Records are never automatically removed.
               </Typography>
               <Button
                 color="error"
@@ -140,7 +156,7 @@ export function SettingsPage() {
             ? {
                 title: 'Reset this prototype database?',
                 description:
-                  'Delete every local person, face template and capture, and restore default settings. This affects only the current prototype key.',
+                  'Delete every local person, face template, capture and identification scan, and restore default settings. This affects only the current prototype key.',
                 run: () => repository.reset(),
               }
             : null
@@ -148,6 +164,9 @@ export function SettingsPage() {
         onClose={() => setReset(false)}
       />
       <RecordDetailsDialog record={details} onClose={() => setDetails(null)} />
+      <Button sx={{ mt: 3 }} onClick={() => setDiagnostic(true)}>
+        Diagnostic image comparison
+      </Button>
     </>
   );
 }

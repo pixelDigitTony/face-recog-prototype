@@ -14,6 +14,7 @@ import {
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import { visuallyHidden } from '@mui/utils';
 import { useLocalDatabase } from '@/utils/hooks/faceRecognition/useLocalDatabase';
 import { useLiveFaceTracking } from '@/utils/hooks/faceRecognition/useLiveFaceTracking';
 import { formatPercentage } from '@/utils/hooks/faceRecognition/recognition/matchPolicy';
@@ -119,6 +120,7 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
                 </Alert>
               )}
             <Box
+              data-testid="live-camera"
               sx={{
                 position: 'relative',
                 aspectRatio: '4/3',
@@ -153,13 +155,32 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
                   </Typography>
                 </Stack>
               )}
-              <FaceOverlay
-                faces={live.faces}
-                frameSize={live.frameSize}
-                similarity={live.similarity}
-                status={live.status}
-                person={person}
-              />
+              <Box
+                component="section"
+                aria-label={person && active && !live.result ? 'Scan instructions' : undefined}
+                sx={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+              >
+                <FaceOverlay
+                  faces={live.faces}
+                  frameSize={live.frameSize}
+                  showInstructions={Boolean(person && active && !live.result)}
+                  liveness={live.liveness}
+                  status={live.status}
+                  actionLabel={person?.activeTemplateId ? 'Replace enrollment' : 'Capture & enroll'}
+                  similarity={live.similarity}
+                />
+                {person && active && !live.result && (
+                  <Box sx={visuallyHidden}>
+                    <LivenessPrompt
+                      liveness={live.liveness}
+                      status={live.status}
+                      actionLabel={
+                        person?.activeTemplateId ? 'Replace enrollment' : 'Capture & enroll'
+                      }
+                    />
+                  </Box>
+                )}
+              </Box>
               {live.camera.active && (
                 <Chip
                   label={`${live.faces.length} faces · Live`}
@@ -193,9 +214,6 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
                   : 'Select a camera-enrolled person to verify. You can start with detection only.'}
               </Alert>
             )}
-            {person && active && !live.result && (
-              <LivenessPrompt liveness={live.liveness} status={live.status} />
-            )}
             {enrollment && (
               <Button
                 fullWidth
@@ -204,7 +222,11 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
                 disabled={live.status !== 'ready_to_enroll'}
                 onClick={enroll}
               >
-                {person?.activeTemplateId ? 'Replace enrollment' : 'Capture & enroll'}
+                {live.status === 'capturing_enrollment' || live.status === 'saving'
+                  ? 'Saving enrollment…'
+                  : person?.activeTemplateId
+                    ? 'Replace enrollment'
+                    : 'Capture & enroll'}
               </Button>
             )}
             {(live.error || live.camera.error || error) && (

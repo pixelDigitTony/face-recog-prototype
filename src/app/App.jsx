@@ -188,8 +188,10 @@ export function App() {
               '& .MuiAlert-icon': { color: '#56775c' },
             }}
           >
-            Prototype — data stays in this browser. Live camera sessions use a basic motion
-            challenge.
+            Prototype — data stays in this browser.{' '}
+            {location.pathname === '/enroll'
+              ? 'Enrollment uses a basic motion challenge.'
+              : 'Automatic identification is experimental.'}
           </Alert>
           {state.mode === 'loading' && <LinearProgress sx={{ mb: 2 }} />}
           {['readonly', 'recovery', 'unavailable'].includes(state.mode) && (

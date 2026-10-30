@@ -21,7 +21,7 @@ export function createBrowserFaceEngine(baseUrl) {
               code: type === 'initialize' ? 'MODEL_ERROR' : 'INFERENCE_ERROR',
             }),
           ),
-        120000,
+        type === 'initialize' ? 120000 : 5000,
       );
       pending.set(requestId, {
         resolve: (value) => finish(resolve, value),
@@ -37,10 +37,11 @@ export function createBrowserFaceEngine(baseUrl) {
     },
     initialize() {
       return (initializing ||= (async () => {
-        worker = new Worker(
+        const instance = new Worker(
           new URL('../../../../workers/faceRecognition.worker.js', import.meta.url),
           { type: 'module' },
         );
+        worker = instance;
         worker.onmessage = ({ data }) => {
           const task = pending.get(data.requestId);
           if (data.ok) task?.resolve(data.result);
@@ -55,12 +56,16 @@ export function createBrowserFaceEngine(baseUrl) {
             );
         };
         try {
-          manifest = await call('initialize', { baseUrl });
+          const loaded = await call('initialize', { baseUrl });
+          if (worker !== instance) throw new DOMException('Recognition cancelled.', 'AbortError');
+          manifest = loaded;
           return manifest;
         } catch (error) {
-          worker.terminate();
-          worker = null;
-          initializing = null;
+          instance.terminate();
+          if (worker === instance) {
+            worker = null;
+            initializing = null;
+          }
           throw error;
         }
       })());
@@ -76,6 +81,20 @@ export function createBrowserFaceEngine(baseUrl) {
         includeEmbedding: options.includeEmbedding,
         saveThumbnails: false,
       });
+    },
+    async setGallery(gallery) {
+      await this.initialize();
+      return call('setGallery', gallery);
+    },
+    async detectFrame(frame, frameId) {
+      await this.initialize();
+      return call('detectFrame', { frame, frameId });
+    },
+    async extractFaces(frameId, detectionIds, galleryVersion) {
+      return call('extractFaces', { frameId, detectionIds, galleryVersion });
+    },
+    async releaseFrame(frameId) {
+      if (worker) return call('releaseFrame', { frameId });
     },
     dispose() {
       worker?.terminate();

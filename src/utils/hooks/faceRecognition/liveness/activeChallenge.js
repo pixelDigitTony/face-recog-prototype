@@ -3,7 +3,7 @@ import { LIVE_TIMING } from '../recognition/liveTiming';
 export function createActiveChallenge({
   random = () => crypto.getRandomValues(new Uint32Array(1))[0] % 2,
 } = {}) {
-  let state, lastTime, lastYaw, baselineStart, baselineYaw, holdStart, holds, phaseStart;
+  let state, lastTime, lastYaw, baselineStart, baselineYaw, holdStart, holds;
   function reset() {
     state = {
       status: 'not_checked',
@@ -11,37 +11,48 @@ export function createActiveChallenge({
       steps: [],
       step: 0,
       challengeId: null,
+      validity: 'continuous_session',
+      expiresAt: null,
+      lastValidatedAt: null,
+      paused: false,
     };
-    lastTime = lastYaw = baselineStart = baselineYaw = holdStart = phaseStart = null;
+    lastTime = lastYaw = baselineStart = baselineYaw = holdStart = null;
     holds = 0;
+  }
+  function pause() {
+    lastTime = lastYaw = holdStart = null;
+    holds = 0;
+    if (!state.challengeId) baselineStart = baselineYaw = null;
+    state = { ...state, paused: true, lastValidatedAt: null };
   }
   reset();
   return {
     reset,
+    pause,
     snapshot: () => structuredClone(state),
     update({ yaw, timestamp, fresh = true }) {
       if (state.status === 'failed' || state.status === 'expired') return state;
-      if (state.status === 'passed_basic') {
-        if (timestamp > state.expiresAt)
-          state = { ...state, status: 'expired', prompt: 'Liveness expired. Start again.' };
+      if (!fresh || !Number.isFinite(yaw) || !Number.isFinite(timestamp)) {
+        pause();
         return state;
       }
-      if (
-        !fresh ||
-        !Number.isFinite(yaw) ||
-        (lastTime !== null &&
-          (timestamp <= lastTime ||
-            timestamp - lastTime > LIVE_TIMING.maxObservationGapMs ||
-            Math.abs(yaw - lastYaw) > 25))
-      ) {
-        reset();
+      if (lastTime !== null && timestamp <= lastTime) return state;
+      if (lastTime !== null && timestamp - lastTime > LIVE_TIMING.maxObservationGapMs) {
+        pause();
         return state;
+      }
+      if (lastYaw !== null && Math.abs(yaw - lastYaw) > 25) {
+        holdStart = null;
+        holds = 0;
       }
       lastTime = timestamp;
       lastYaw = yaw;
+      state = { ...state, paused: false, lastValidatedAt: timestamp };
+      if (state.status === 'passed_basic') return state;
       if (!state.challengeId) {
         if (Math.abs(yaw) > 10) {
           baselineStart = null;
+          baselineYaw = null;
           return state;
         }
         baselineStart ??= timestamp;
@@ -53,19 +64,10 @@ export function createActiveChallenge({
           status: 'checking',
           challengeId: crypto.randomUUID(),
           startedAt: timestamp,
+          neutralYaw: baselineYaw,
           steps: directions.flatMap((direction) => [{ direction }, { direction: 'neutral' }]),
           prompt: `Turn your head ${directions[0]}`,
         };
-        phaseStart = timestamp;
-      }
-      if (timestamp - state.startedAt > 25000 || timestamp - phaseStart > 8000) {
-        state = {
-          ...state,
-          status: 'failed',
-          prompt: 'Motion challenge timed out. Try again.',
-          reason: 'CHALLENGE_TIMEOUT',
-        };
-        return state;
       }
       const step = state.steps[state.step],
         relative = yaw - baselineYaw;
@@ -79,6 +81,7 @@ export function createActiveChallenge({
       if (!inPose) {
         holdStart = null;
         holds = 0;
+        state = { ...state, paused: true };
         return state;
       }
       holdStart ??= timestamp;
@@ -93,11 +96,10 @@ export function createActiveChallenge({
             ...state,
             status: 'passed_basic',
             passedAt: timestamp,
-            expiresAt: timestamp + 5000,
+            expiresAt: null,
             prompt: 'Basic liveness passed — look straight ahead',
           };
         else {
-          if (state.step % 2 === 0) phaseStart = timestamp;
           state = {
             ...state,
             prompt:

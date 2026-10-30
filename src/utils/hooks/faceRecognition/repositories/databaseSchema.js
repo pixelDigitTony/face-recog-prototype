@@ -1,10 +1,12 @@
 import { defaultSettings, OUTCOMES } from '@/features/face-recognition/constants';
 import { percentage, LIVE_POLICY } from '../recognition/matchPolicy';
+import { LIVE_TIMING } from '../recognition/liveTiming';
+import { validateIdentificationEvent } from './validateIdentificationEvent';
 
 export function createDatabase(scope) {
   const now = new Date().toISOString();
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     databaseId: crypto.randomUUID(),
     revision: 0,
     createdAt: now,
@@ -13,6 +15,7 @@ export function createDatabase(scope) {
     people: [],
     templates: [],
     attempts: [],
+    identificationEvents: [],
     settings: { ...defaultSettings },
   };
 }
@@ -26,7 +29,7 @@ export function validateEmbedding(value) {
   if (Math.abs(norm - 1) > 0.005) fail('Embedding must be normalized.');
 }
 export function validateDatabase(db, scope, legacy = false) {
-  if (!db || db.schemaVersion !== (legacy ? 1 : 2))
+  if (!db || db.schemaVersion !== (legacy === true ? 1 : legacy === 2 ? 2 : 3))
     fail(
       'Unsupported database schema. Export the original data or reset this prototype.',
       'SCHEMA_ERROR',
@@ -38,7 +41,7 @@ export function validateDatabase(db, scope, legacy = false) {
   for (const key of ['createdAt', 'updatedAt'])
     if (!Number.isFinite(Date.parse(db[key]))) fail('Invalid database timestamp.');
   const settings = db.settings;
-  if (!legacy && settings?.matchThreshold !== 0.85)
+  if (legacy !== true && settings?.matchThreshold !== 0.85)
     fail('Live matching requires strictly above 85%.');
   if (
     !settings ||
@@ -50,7 +53,12 @@ export function validateDatabase(db, scope, legacy = false) {
     fail('Invalid settings.');
   for (const key of ['maxPeople', 'maxAttempts', 'maxEstimatedBytes'])
     if (settings[key] !== defaultSettings[key]) fail('Invalid storage capacity setting.');
-  for (const key of ['people', 'templates', 'attempts']) {
+  for (const key of [
+    'people',
+    'templates',
+    'attempts',
+    ...(db.schemaVersion === 3 ? ['identificationEvents'] : []),
+  ]) {
     if (!Array.isArray(db[key])) fail(`Invalid ${key} collection.`);
     const ids = new Set();
     for (const record of db[key]) {
@@ -140,13 +148,31 @@ export function validateDatabase(db, scope, legacy = false) {
           live.steps?.length !== 4 ||
           !live.steps.every((s) => Number.isFinite(s.completedAt)) ||
           !Number.isFinite(live.passedAt) ||
-          !Number.isFinite(live.expiresAt) ||
           !Number.isFinite(attempt.decisionTimestamp) ||
-          attempt.decisionTimestamp > live.expiresAt ||
-          attempt.decisionTimestamp < live.passedAt ||
-          live.expiresAt - live.passedAt > 5000
+          attempt.decisionTimestamp < live.passedAt
         )
           fail('Live match/enrollment evidence is incomplete.');
+        if (live.policyVersion === 'head-turn-v2') {
+          if (
+            live.validity !== 'continuous_session' ||
+            live.expiresAt !== null ||
+            live.sessionId !== attempt.sessionId ||
+            !live.sessionId ||
+            live.trackId !== attempt.trackId ||
+            !Number.isInteger(live.trackId) ||
+            !Number.isFinite(live.lastValidatedAt) ||
+            live.lastValidatedAt < live.passedAt ||
+            live.lastValidatedAt > attempt.decisionTimestamp ||
+            attempt.decisionTimestamp - live.lastValidatedAt > LIVE_TIMING.maxFrameAgeMs
+          )
+            fail('Continuous-session liveness evidence is incomplete.');
+        } else if (
+          !Number.isFinite(live.expiresAt) ||
+          attempt.decisionTimestamp > live.expiresAt ||
+          live.expiresAt - live.passedAt > 5000
+        ) {
+          fail('Legacy liveness evidence is expired.');
+        }
       }
       if (
         attempt.authoritative !== false ||
@@ -164,13 +190,7 @@ export function validateDatabase(db, scope, legacy = false) {
           attempt.similarity <= 0.85 ||
           attempt.stableSampleCount !== 3 ||
           attempt.stableDurationMs < 600 ||
-          attempt.scoreAggregation !== 'minimum' ||
-          !attempt.liveness?.challengeId ||
-          attempt.liveness.steps?.length !== 4 ||
-          !attempt.liveness.steps.every((s) => Number.isFinite(s.completedAt)) ||
-          !Number.isFinite(attempt.liveness.expiresAt) ||
-          attempt.decisionTimestamp > attempt.liveness.expiresAt ||
-          attempt.decisionTimestamp < attempt.liveness.passedAt)
+          attempt.scoreAggregation !== 'minimum')
       )
         fail('Live match evidence is incomplete.');
       if (
@@ -179,14 +199,12 @@ export function validateDatabase(db, scope, legacy = false) {
           attempt.livenessStatus !== 'not_checked')
       )
         fail('Images are diagnostic only.');
-      if (
-        attempt.outcome === 'ENROLLED' &&
-        (attempt.source !== 'live_camera' ||
-          attempt.livenessStatus !== 'passed_basic' ||
-          attempt.decisionTimestamp > attempt.liveness.expiresAt)
-      )
-        fail('Enrollment requires fresh basic liveness.');
     }
+  }
+  for (const event of db.identificationEvents ?? []) {
+    validateIdentificationEvent(event, scope);
+    if (event.personId && !people.has(event.personId))
+      fail('Identification person link is invalid.');
   }
   return db;
 }

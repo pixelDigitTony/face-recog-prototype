@@ -77,7 +77,7 @@ export function useLiveFaceTracking(personId, purpose) {
   }, [personId, purpose, live]);
   useEffect(() => {
     if (camera.error) {
-      scheduler.current?.stop();
+      stop();
       live.fail(new Error(camera.error));
     }
   }, [camera.error, live]);

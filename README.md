@@ -25,11 +25,15 @@ npm.cmd run dev
 
 1. On **Enroll**, click **+**, enter an employee code and name, acknowledge browser storage, and save the person.
 2. Click **Start live scan**. Keep one face visible, look straight ahead, then follow the randomized left/right head-turn and return prompts. After basic liveness passes, click **Capture & enroll** (or explicitly replace an enrollment).
-3. On **Scan face**, select that enrolled person and **Start live scan**. All detected faces receive boxes, temporary track IDs and detection details. Verification pauses whenever more than one face appears. After basic liveness, three fresh consecutive comparisons **strictly above 85%** produce a match. Exactly 85% fails. **Start next verification** rearms a new session; staying in frame does not create repeated rows.
+3. On **Scan face**, click **Start scanning**. Each visible face is automatically compared with eligible enrollments, without person selection or head-turn instructions. Three consistent comparisons **strictly above 85%**, with a unique winner and a 0.05 raw-score separation from the runner-up, identify the person. Exactly 85% fails. Unknown/ambiguous faces remain unnamed. Scanning continues automatically and suppresses duplicate history rows.
 4. Open **Local database** to inspect People, Templates, Captures, and Settings/Metadata. Each **View** dialog exposes the full stored record, including numeric face embeddings.
 5. Use **Settings** to change thumbnail retention. The required threshold is fixed at raw cosine > 0.85. **Export JSON** includes the entire database. Deletion and reset always require an explicit action.
 
 **Use test image** opens the diagnostic capture flow. It runs the real models, displays similarity and saves diagnostic records, but cannot complete liveness or produce a live match. Image-created templates are excluded from live verification. Fixtures under `tests/fixtures/` are never automatically seeded into localStorage.
+
+Completed challenge steps stay saved for the same tracked face during the camera session. Wrong movements or delays let you retry the current instruction; they do not clear earlier passed steps. After completion and preparation of a reference capture, **Capture & enroll** stays enabled while the single face remains tracked. Detection continues; pose and identity checks run again only when you click. A rejected capture explains what to correct and retains the completed steps for retry. Changing/lost tracking, multiple faces, or restarting the camera starts a new challenge.
+
+**Scan face** searches the complete eligible local gallery independently for each tracked face. It performs similarity identification with **liveness not checked**; enrollment's earlier motion challenge is separate provenance. Being enrolled does not guarantee a score above the requested cutoff. **Settings → Diagnostic image comparison** retains selected-person image testing separately from automatic scanning.
 
 Camera access needs localhost or HTTPS. Model loading is explicit and may take longer on the first visit. Ready sessions can run inference without network access; a cold offline reload is outside the MVP. Clearing browser data, changing origin/port, or using another profile creates a different local database.
 
@@ -37,7 +41,7 @@ Camera access needs localhost or HTTPS. Model loading is explicit and may take l
 
 The initial key is `stk:face-prototype:v1:standalone:stk-prototype:db`. The repository commits one validated JSON envelope per operation. An exclusive Web Lock allows one writer tab; other tabs observe data in read-only mode. Close the writer and reload another tab to take over.
 
-Limits are 50 people, 200 capture attempts, and a conservative 3 MiB estimated storage budget. The first reached limit blocks additions; there is no automatic eviction. A failed write leaves prior data intact and keeps the new result explicitly unsaved. **Retry save** reuses the same attempt ID without repeating inference. An unsaved result is lost on reload or navigation.
+Limits are 50 people, 200 combined capture/identification history records, and a conservative 3 MiB estimated storage budget. The first reached limit blocks additions; there is no automatic eviction. A failed write leaves prior data intact and keeps the new result explicitly unsaved. **Retry save** reuses the same event ID without repeating inference. An unsaved result is lost on reload or navigation.
 
 Retained thumbnails are at most 96 × 96 JPEG and 4,096 characters. Embeddings contain 128 normalized numeric values. Full video and source frames are not retained. Corrupt or unsupported data is preserved for download; recovery never silently resets the database. Reset touches only the prototype's scoped key.
 
@@ -74,7 +78,7 @@ import { FaceRecognitionModule, EnrollmentPage } from './features/face-recogniti
 
 Later, replace `FaceWorkflow` with an STK API adapter for server-authoritative enrollment/verification, replace local queries with scoped API queries, and supply actual company/store/employee identity from STK. Keep the raw database viewer prototype-only. Production attendance must use a server-issued decision tied to employee, scope and action; it must not trust a browser score.
 
-`liveFaceWorkflow.js` coordinates transient tracking, challenge evidence and session decisions; `faceWorkflow.js` prepares terminal enrollment/verification operations and immutable retry data. Schema v2 migrates the known v1 format and rejects unknown versions without resetting data. See the [live specification](docs/STK_LIVE_FACE_TRACKING_SPEC.md), [UML](docs/STK_FACE_RECOGNITION_PROTOTYPE_UML.puml), and [validation record](docs/IMPLEMENTATION.md).
+`liveIdentificationWorkflow.js` coordinates the gallery, per-face evidence, continuous scanning and deduplicated events. `liveFaceWorkflow.js` retains guided enrollment; `faceWorkflow.js` retains enrollment/diagnostic operations. Schema v3 migrates v1/v2 and preserves their historical interpretation. See the [automatic identification specification](docs/STK_AUTOMATIC_FACE_IDENTIFICATION_SPEC.md), [UML](docs/STK_FACE_RECOGNITION_PROTOTYPE_UML.puml), and [validation record](docs/IMPLEMENTATION.md).
 
 ## Validation
 

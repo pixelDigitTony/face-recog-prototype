@@ -38,6 +38,7 @@ export function filterAndSortRecords(
             row.displayName,
             row.department,
             row.personSnapshot,
+            row.outcome,
             row.id,
           ])
             .toLowerCase()

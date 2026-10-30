@@ -69,7 +69,15 @@ export function ScanResult({ workflow }) {
               </Typography>
             </Box>
           </Stack>
-          {result.reasonCode && (
+          {result.outcome === 'NO_MATCH' && (
+            <Alert severity="warning">
+              Face detected. Match similarity {formatPercentage(result.similarity)} did not pass
+              this attempt’s {result.comparisonOperator ?? '>='}{' '}
+              {(result.thresholdSnapshot * 100).toFixed(2)}% rule. Check the selected person and try
+              a fresh enrollment in similar lighting.
+            </Alert>
+          )}
+          {result.reasonCode && result.reasonCode !== 'BELOW_MATCH_THRESHOLD' && (
             <Alert severity="info">{result.reasonCode.replaceAll('_', ' ')}</Alert>
           )}
           {!result.persisted && (

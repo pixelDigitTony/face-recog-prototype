@@ -43,6 +43,7 @@ export function DatabasePage() {
     [editing, setEditing] = useState(null),
     [error, setError] = useState(null);
   const writable = state.mode === 'writable';
+  const history = ['attempts', 'identificationEvents'].includes(tab);
   const columns =
     tab === 'people'
       ? [
@@ -87,75 +88,100 @@ export function DatabasePage() {
             },
             { key: 'createdAt', label: 'Created', render: (row) => formatDate(row.createdAt) },
           ]
-        : tab === 'attempts'
+        : tab === 'identificationEvents'
           ? [
               { key: 'completedAt', label: 'Time', render: (row) => formatDate(row.completedAt) },
               {
                 key: 'personSnapshot',
                 label: 'Person',
-                render: (row) => (
-                  <>
-                    <Typography variant="body2" fontWeight={600}>
-                      {row.personSnapshot.displayName}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {row.personSnapshot.employeeCode}
-                    </Typography>
-                  </>
-                ),
+                render: (row) =>
+                  row.personSnapshot
+                    ? `${row.personSnapshot.displayName} (${row.personSnapshot.employeeCode})`
+                    : row.outcome === 'UNKNOWN'
+                      ? 'Unknown face'
+                      : 'Ambiguous match',
               },
-              { key: 'purpose', label: 'Purpose' },
-              {
-                key: 'outcome',
-                label: 'Outcome',
-                render: (row) => (
-                  <Chip
-                    size="small"
-                    label={row.outcome.replaceAll('_', ' ')}
-                    color={['MATCH', 'ENROLLED'].includes(row.outcome) ? 'success' : 'default'}
-                    variant="outlined"
-                  />
-                ),
-              },
+              { key: 'outcome', label: 'Outcome' },
               {
                 key: 'similarity',
                 label: 'Match similarity',
                 render: (row) => formatPercentage(row.similarity),
               },
+              { key: 'thresholdSnapshot', label: 'Threshold', render: () => '> 85%' },
+              { key: 'faceCountAtDecision', label: 'Face count' },
               { key: 'livenessStatus', label: 'Liveness' },
               { key: 'source', label: 'Source' },
-              { key: 'faceCountAtDecision', label: 'Face count' },
               { key: 'decisionPolicyVersion', label: 'Policy' },
-              {
-                key: 'thresholdSnapshot',
-                label: 'Threshold',
-                render: (row) => row.thresholdSnapshot.toFixed(4),
-              },
-              {
-                key: 'timingsMs',
-                label: 'Time',
-                render: (row) =>
-                  row.timingsMs.total ? `${Math.round(row.timingsMs.total)} ms` : '—',
-              },
-              {
-                key: 'thumbnailDataUrl',
-                label: 'Thumbnail',
-                render: (row) => (
-                  <Avatar
-                    variant="rounded"
-                    src={row.thumbnailDataUrl ?? undefined}
-                    alt="Capture thumbnail"
-                  >
-                    —
-                  </Avatar>
-                ),
-              },
             ]
-          : [
-              { key: 'key', label: 'Key' },
-              { key: 'value', label: 'Value' },
-              { key: 'type', label: 'Type' },
-            ];
+          : tab === 'attempts'
+            ? [
+                { key: 'completedAt', label: 'Time', render: (row) => formatDate(row.completedAt) },
+                {
+                  key: 'personSnapshot',
+                  label: 'Person',
+                  render: (row) => (
+                    <>
+                      <Typography variant="body2" fontWeight={600}>
+                        {row.personSnapshot.displayName}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {row.personSnapshot.employeeCode}
+                      </Typography>
+                    </>
+                  ),
+                },
+                { key: 'purpose', label: 'Purpose' },
+                {
+                  key: 'outcome',
+                  label: 'Outcome',
+                  render: (row) => (
+                    <Chip
+                      size="small"
+                      label={row.outcome.replaceAll('_', ' ')}
+                      color={['MATCH', 'ENROLLED'].includes(row.outcome) ? 'success' : 'default'}
+                      variant="outlined"
+                    />
+                  ),
+                },
+                {
+                  key: 'similarity',
+                  label: 'Match similarity',
+                  render: (row) => formatPercentage(row.similarity),
+                },
+                { key: 'livenessStatus', label: 'Liveness' },
+                { key: 'source', label: 'Source' },
+                { key: 'faceCountAtDecision', label: 'Face count' },
+                { key: 'decisionPolicyVersion', label: 'Policy' },
+                {
+                  key: 'thresholdSnapshot',
+                  label: 'Threshold',
+                  render: (row) => row.thresholdSnapshot.toFixed(4),
+                },
+                {
+                  key: 'timingsMs',
+                  label: 'Time',
+                  render: (row) =>
+                    row.timingsMs.total ? `${Math.round(row.timingsMs.total)} ms` : '—',
+                },
+                {
+                  key: 'thumbnailDataUrl',
+                  label: 'Thumbnail',
+                  render: (row) => (
+                    <Avatar
+                      variant="rounded"
+                      src={row.thumbnailDataUrl ?? undefined}
+                      alt="Capture thumbnail"
+                    >
+                      —
+                    </Avatar>
+                  ),
+                },
+              ]
+            : [
+                { key: 'key', label: 'Key' },
+                { key: 'value', label: 'Value' },
+                { key: 'type', label: 'Type' },
+              ];
   const metadata = db
     ? [
         ...Object.entries(db.settings).map(([key, value]) => ({
@@ -165,17 +191,22 @@ export function DatabasePage() {
           type: typeof value,
         })),
         ...Object.entries(db)
-          .filter(([key]) => !['people', 'templates', 'attempts', 'settings'].includes(key))
+          .filter(
+            ([key]) =>
+              !['people', 'templates', 'attempts', 'identificationEvents', 'settings'].includes(
+                key,
+              ),
+          )
           .map(([key, value]) => ({ id: key, key, value, type: typeof value })),
       ]
     : [];
   const rows = filterAndSortRecords(tab === 'metadata' ? metadata : (db?.[tab] ?? []), {
     search: tab === 'metadata' ? '' : search,
-    outcome: tab === 'attempts' ? outcome : '',
-    personId: tab === 'attempts' ? personId : '',
+    outcome: history ? outcome : '',
+    personId: history ? personId : '',
     purpose: tab === 'attempts' ? purpose : '',
-    from: tab === 'attempts' ? from : '',
-    to: tab === 'attempts' ? to : '',
+    from: history ? from : '',
+    to: history ? to : '',
     orderBy,
     direction,
   });
@@ -230,8 +261,15 @@ export function DatabasePage() {
           onChange={(_, value) => {
             setTab(value);
             setSearch('');
+            setOutcome('');
+            setPersonId('');
+            setPurpose('');
             setOrderBy(
-              value === 'attempts' ? 'completedAt' : value === 'metadata' ? 'key' : 'createdAt',
+              ['attempts', 'identificationEvents'].includes(value)
+                ? 'completedAt'
+                : value === 'metadata'
+                  ? 'key'
+                  : 'createdAt',
             );
           }}
           variant="scrollable"
@@ -239,6 +277,10 @@ export function DatabasePage() {
           sx={{ px: 2, borderBottom: 1, borderColor: 'divider' }}
         >
           <Tab value="attempts" label={`Captures (${db?.attempts.length ?? 0})`} />
+          <Tab
+            value="identificationEvents"
+            label={`Identification scans (${db?.identificationEvents.length ?? 0})`}
+          />
           <Tab value="people" label={`People (${db?.people.length ?? 0})`} />
           <Tab value="templates" label={`Templates (${db?.templates.length ?? 0})`} />
           <Tab value="metadata" label="Settings & metadata" />
@@ -251,7 +293,7 @@ export function DatabasePage() {
               onChange={(e) => setSearch(e.target.value)}
               sx={{ minWidth: 250, flex: 1 }}
             />
-            {tab === 'attempts' && (
+            {history && (
               <>
                 <TextField
                   select
@@ -261,7 +303,10 @@ export function DatabasePage() {
                   sx={{ minWidth: 160 }}
                 >
                   <MenuItem value="">All outcomes</MenuItem>
-                  {OUTCOMES.map((value) => (
+                  {(tab === 'identificationEvents'
+                    ? ['IDENTIFIED', 'UNKNOWN', 'AMBIGUOUS']
+                    : OUTCOMES
+                  ).map((value) => (
                     <MenuItem key={value} value={value}>
                       {value.replaceAll('_', ' ')}
                     </MenuItem>
@@ -284,6 +329,7 @@ export function DatabasePage() {
                 <TextField
                   select
                   label="Purpose"
+                  disabled={tab === 'identificationEvents'}
                   value={purpose}
                   onChange={(e) => setPurpose(e.target.value)}
                   sx={{ minWidth: 120 }}
@@ -334,7 +380,7 @@ export function DatabasePage() {
                   onClick={() =>
                     setDeletion({
                       title: 'Delete person and face data?',
-                      description: `This removes ${row.displayName}, ${db.templates.filter((t) => t.personId === row.id).length} template(s), and ${db.attempts.filter((a) => a.personId === row.id).length} capture(s).`,
+                      description: `This removes ${row.displayName}, their face template, captures and linked identification scans.`,
                       run: () => workflow.deletePersonData({ personId: row.id }),
                     })
                   }
@@ -342,15 +388,23 @@ export function DatabasePage() {
                   Delete
                 </Button>
               </>
-            ) : tab === 'attempts' ? (
+            ) : history ? (
               <Button
                 size="small"
                 color="error"
                 onClick={() =>
                   setDeletion({
-                    title: 'Delete capture?',
+                    title:
+                      tab === 'identificationEvents'
+                        ? 'Delete identification scan?'
+                        : 'Delete capture?',
                     description: 'This removes this capture record and its retained face data.',
-                    run: () => repository.commit({ type: 'deleteAttempt', id: row.id }),
+                    run: () =>
+                      repository.commit({
+                        type:
+                          tab === 'identificationEvents' ? 'deleteIdentification' : 'deleteAttempt',
+                        id: row.id,
+                      }),
                   })
                 }
               >
@@ -369,20 +423,28 @@ export function DatabasePage() {
         <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
           Schema {db?.schemaVersion ?? '—'} · Revision {db?.revision ?? '—'} · {state.key}
         </Typography>
-        {tab === 'attempts' && (
+        {history && (
           <Button
             color="error"
             size="small"
-            disabled={!writable || !db?.attempts.length}
+            disabled={!writable || !db?.[tab].length}
             onClick={() =>
               setDeletion({
-                title: 'Clear capture history?',
-                description: `Delete ${db.attempts.length} captures. People and enrollment templates remain.`,
-                run: () => repository.commit({ type: 'clearAttempts' }),
+                title:
+                  tab === 'identificationEvents'
+                    ? 'Clear identification history?'
+                    : 'Clear capture history?',
+                description: `Delete ${db[tab].length} records from this history. People and enrollment templates remain.`,
+                run: () =>
+                  repository.commit({
+                    type: tab === 'identificationEvents' ? 'clearIdentifications' : 'clearAttempts',
+                  }),
               })
             }
           >
-            Clear capture history
+            {tab === 'identificationEvents'
+              ? 'Clear identification history'
+              : 'Clear capture history'}
           </Button>
         )}
       </Stack>

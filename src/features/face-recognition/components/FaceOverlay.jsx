@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box } from '@mui/material';
+import { LivenessPrompt } from './LivenessPrompt';
 import { formatPercentage } from '@/utils/hooks/faceRecognition/recognition/matchPolicy';
 export function overlayBox(box, frameSize, size, mirrored = true) {
   const scale = Math.max(size[0] / frameSize[0], size[1] / frameSize[1]);
@@ -12,7 +13,89 @@ export function overlayBox(box, frameSize, size, mirrored = true) {
     height: box[3] * scale,
   };
 }
-export function FaceOverlay({ faces, frameSize, similarity, status, person }) {
+function FaceLabel({
+  face,
+  box,
+  size,
+  showInstructions,
+  liveness,
+  status,
+  actionLabel,
+  similarity,
+  maxLabelWidth,
+}) {
+  const ref = useRef(null),
+    [height, setHeight] = useState(64);
+  useEffect(() => {
+    const observer = new ResizeObserver(() =>
+      setHeight(ref.current.getBoundingClientRect().height),
+    );
+    observer.observe(ref.current);
+    return () => observer.disconnect();
+  }, []);
+  const width = Math.max(0, Math.min(size[0] - 16, maxLabelWidth, Math.max(190, box.width)));
+  const left = Math.max(8, Math.min(box.left + (box.width - width) / 2, size[0] - width - 8));
+  const top = Math.max(8, Math.min(box.top - height - 14, size[1] - height - 16));
+  return (
+    <Box
+      ref={ref}
+      data-testid="face-label"
+      data-track-id={face.trackId}
+      sx={{
+        position: 'absolute',
+        left,
+        top,
+        width,
+        boxSizing: 'border-box',
+        zIndex: 2,
+        bgcolor: 'rgba(8,29,27,.88)',
+        color: 'white',
+        p: 1,
+        borderRadius: 1,
+        border: '1px solid rgba(255,255,255,.25)',
+        overflowWrap: 'anywhere',
+      }}
+    >
+      {showInstructions && (
+        <Box sx={{ mb: 0.75 }}>
+          <LivenessPrompt compact liveness={liveness} status={status} actionLabel={actionLabel} />
+        </Box>
+      )}
+      <Box data-testid="face-label-details" sx={{ fontSize: 11, lineHeight: 1.4 }}>
+        {face.identification && (
+          <Box component="div" sx={{ fontWeight: 700 }}>
+            {face.identification.person
+              ? `Recognized: ${face.identification.person.personSnapshot.displayName} (${face.identification.person.personSnapshot.employeeCode})`
+              : ({
+                  unknown: 'Unknown face',
+                  ambiguous: 'Ambiguous match',
+                  quality_blocked: 'Low image quality',
+                  waiting_for_analysis: 'Waiting for analysis',
+                  identity_conflict: 'Identity conflict',
+                }[face.identification.status] ?? 'Searching')}
+          </Box>
+        )}
+        Face #{face.trackId} · Detection {(face.confidence * 100).toFixed(1)}%
+        {similarity !== null && similarity !== undefined && (
+          <>
+            <br />
+            Match {formatPercentage(similarity)}
+          </>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+export function FaceOverlay({
+  faces,
+  frameSize,
+  showInstructions = false,
+  liveness,
+  status,
+  actionLabel,
+  similarity = null,
+}) {
   const ref = useRef(null),
     [size, setSize] = useState([0, 0]);
   useEffect(() => {
@@ -31,51 +114,72 @@ export function FaceOverlay({ faces, frameSize, similarity, status, person }) {
       {frameSize &&
         faces.map((face) => {
           const box = overlayBox(face.box, frameSize, size),
-            blocked = faces.length > 1 || face.reasonCode;
+            blocked = face.identification
+              ? [
+                  'unknown',
+                  'ambiguous',
+                  'quality_blocked',
+                  'identity_conflict',
+                  'waiting_for_analysis',
+                ].includes(face.identification.status)
+              : faces.length > 1 || face.reasonCode;
           return (
-            <Box
-              key={face.trackId}
-              data-testid="face-box"
-              sx={{
-                position: 'absolute',
-                ...box,
-                border: '2px solid',
-                borderColor: blocked ? '#ffbf47' : '#68c9ff',
-                borderRadius: 1,
-              }}
-            >
+            <Box key={face.trackId}>
               <Box
+                data-testid="face-box"
+                data-track-id={face.trackId}
                 sx={{
                   position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  bgcolor: 'rgba(8,29,27,.9)',
-                  color: 'white',
-                  fontSize: 11,
-                  p: 0.5,
-                  lineHeight: 1.4,
-                  maxWidth: Math.max(90, box.width),
-                  overflowWrap: 'anywhere',
+                  ...box,
+                  border: '2px solid',
+                  borderColor: face.identification?.person
+                    ? '#70e39a'
+                    : blocked
+                      ? '#ffbf47'
+                      : '#68c9ff',
+                  borderRadius: 1,
                 }}
-              >
-                Face #{face.trackId} · Detection {(face.confidence * 100).toFixed(0)}%<br />
-                {blocked
-                  ? faces.length > 1
-                    ? 'Multiple faces — paused'
-                    : face.reasonCode.replaceAll('_', ' ')
-                  : status.replaceAll('_', ' ')}
-                {faces.length === 1 && person && (
-                  <>
-                    <br />
-                    Verifying against {person.employeeCode}
-                    <br />
-                    Match {formatPercentage(similarity)}
-                  </>
-                )}
-              </Box>
+              />
+              <FaceLabel
+                face={face}
+                box={box}
+                size={size}
+                maxLabelWidth={
+                  faces.length > 1 ? Math.max(104, size[0] / faces.length - 16) : size[0] - 16
+                }
+                showInstructions={showInstructions}
+                liveness={liveness}
+                status={faces.length > 1 ? 'multiple_faces' : status}
+                actionLabel={actionLabel}
+                similarity={
+                  face.identification
+                    ? face.identification.similarity
+                    : faces.length === 1
+                      ? similarity
+                      : null
+                }
+              />
             </Box>
           );
         })}
+      {showInstructions && faces.length === 0 && (
+        <Box
+          data-testid="no-face-instruction"
+          sx={{
+            position: 'absolute',
+            top: 8,
+            left: 8,
+            right: 8,
+            zIndex: 2,
+            p: 1,
+            borderRadius: 1,
+            bgcolor: 'rgba(8,29,27,.88)',
+            color: 'white',
+          }}
+        >
+          <LivenessPrompt compact liveness={liveness} status={status} actionLabel={actionLabel} />
+        </Box>
+      )}
     </Box>
   );
 }

@@ -30,8 +30,8 @@ test('real browser enrollment, verification, database, reload and read-only tab'
   expect(db.templates[0].embedding).toHaveLength(128);
   expect(db.attempts).toHaveLength(1);
   expect(db.templates[0].thumbnailDataUrl.length).toBeLessThanOrEqual(4096);
-  await page.getByRole('link', { name: 'Scan face', exact: true }).first().click();
-  await page.getByRole('button', { name: 'Use test image', exact: true }).click();
+  await page.getByRole('link', { name: 'Settings', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Diagnostic image comparison', exact: true }).click();
   await page.getByRole('combobox').click();
   await page.getByRole('option', { name: /TEST-001/ }).click();
   await page.getByLabel('Choose test image').setInputFiles(path.resolve('tests/fixtures/lena.jpg'));

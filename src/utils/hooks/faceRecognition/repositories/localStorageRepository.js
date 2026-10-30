@@ -1,6 +1,7 @@
 import { createDatabase, validateDatabase, fail } from './databaseSchema';
 import { acquireWriterLock } from './writerLock';
 import { migrateDatabase } from './migrateDatabase';
+import { buildEnrollmentGallery } from '../recognition/enrollmentGallery';
 
 export function createLocalStorageRepository({
   context,
@@ -24,7 +25,7 @@ export function createLocalStorageRepository({
       const original = raw === null ? null : JSON.parse(raw);
       const database =
         original === null ? createDatabase(context) : migrateDatabase(original, context);
-      if (original?.schemaVersion === 1 && writer?.writable) {
+      if (original && original.schemaVersion !== database.schemaVersion && writer?.writable) {
         persist(database);
         return;
       }
@@ -44,7 +45,7 @@ export function createLocalStorageRepository({
     const raw = JSON.stringify(db);
     if (
       db.people.length > db.settings.maxPeople ||
-      db.attempts.length > db.settings.maxAttempts ||
+      db.attempts.length + db.identificationEvents.length > db.settings.maxAttempts ||
       raw.length * 2 > db.settings.maxEstimatedBytes
     )
       fail(
@@ -118,6 +119,41 @@ export function createLocalStorageRepository({
             fail('Enrollment changed. Discard this result and capture again.', 'STALE_CONTEXT');
         }
         switch (operation.type) {
+          case 'saveIdentification': {
+            const existing = db.identificationEvents.find((e) => e.id === operation.event.id);
+            if (existing) {
+              if (JSON.stringify(existing) !== JSON.stringify(operation.event))
+                fail('Identification ID conflicts with a saved record.');
+              return db;
+            }
+            const gallery = await buildEnrollmentGallery(db, operation.manifest, context);
+            if (
+              gallery.version !== operation.event.galleryVersion ||
+              gallery.entries.length !== operation.event.eligibleCount
+            )
+              fail(
+                'Enrollments changed. Discard this scan result and scan again.',
+                'STALE_CONTEXT',
+              );
+            const winner = gallery.entries.find((e) => e.personId === operation.event.personId);
+            if (
+              operation.event.outcome === 'IDENTIFIED' &&
+              (!winner ||
+                winner.templateId !== operation.event.templateId ||
+                winner.templateVersion !== operation.event.templateVersion ||
+                JSON.stringify(winner.personSnapshot) !==
+                  JSON.stringify(operation.event.personSnapshot))
+            )
+              fail('Enrollment changed before identification could save.', 'STALE_CONTEXT');
+            db.identificationEvents.push(operation.event);
+            break;
+          }
+          case 'deleteIdentification':
+            db.identificationEvents = db.identificationEvents.filter((e) => e.id !== operation.id);
+            break;
+          case 'clearIdentifications':
+            db.identificationEvents = [];
+            break;
           case 'savePerson': {
             const person = {
               ...operation.person,
@@ -159,6 +195,9 @@ export function createLocalStorageRepository({
             db.people = db.people.filter((p) => p.id !== operation.id);
             db.templates = db.templates.filter((t) => t.personId !== operation.id);
             db.attempts = db.attempts.filter((a) => a.personId !== operation.id);
+            db.identificationEvents = db.identificationEvents.filter(
+              (e) => e.personId !== operation.id,
+            );
             break;
           case 'settings':
             if (operation.settings.matchThreshold !== 0.85)

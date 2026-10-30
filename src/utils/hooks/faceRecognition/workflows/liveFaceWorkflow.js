@@ -31,7 +31,8 @@ export function createLiveFaceWorkflow({
     processing = false,
     lastComparison = -Infinity,
     trackId = null,
-    lastExtracted = null,
+    lastFaceSeenAt = null,
+    enrollmentCandidate = null,
     pipelineStartedAt = null,
     controller;
   const publish = (patch) => {
@@ -39,16 +40,35 @@ export function createLiveFaceWorkflow({
     listeners.forEach((fn) => fn());
   };
   function clearEvidence() {
+    if (session && challenge.snapshot().challengeId) session.acquiringSince = now();
     challenge.reset();
     stable.reset();
     trackId = null;
-    lastExtracted = null;
+    lastFaceSeenAt = null;
+    enrollmentCandidate = null;
     if (session) {
       session.frame = null;
       session.enrollRequested = false;
-      session.baselineEmbedding = null;
     }
     publish({ similarity: null, liveness: challenge.snapshot() });
+  }
+  function pauseEvidence() {
+    challenge.pause();
+    stable.reset();
+    if (!hasEnrollmentCapture()) enrollmentCandidate = null;
+    if (session) {
+      session.frame = null;
+      session.enrollRequested = false;
+    }
+    publish({ similarity: null, liveness: challenge.snapshot() });
+  }
+  function currentPass(live) {
+    return (
+      live.status === 'passed_basic' &&
+      Number.isFinite(live.lastValidatedAt) &&
+      live.lastValidatedAt <= now() &&
+      now() - live.lastValidatedAt <= LIVE_TIMING.maxFrameAgeMs
+    );
   }
   function valid() {
     const db = repository.getSnapshot().database;
@@ -59,6 +79,27 @@ export function createLiveFaceWorkflow({
       person.activeTemplateId === session.person.activeTemplateId &&
       JSON.stringify(person) === JSON.stringify(session.person)
     );
+  }
+  function canEnroll() {
+    return (
+      hasEnrollmentCapture() &&
+      lastFaceSeenAt !== null &&
+      now() - lastFaceSeenAt <= LIVE_TIMING.maxFrameAgeMs &&
+      state.faces.length === 1
+    );
+  }
+  function hasEnrollmentCapture() {
+    return (
+      session?.purpose === 'enroll' &&
+      !session.completed &&
+      challenge.snapshot().status === 'passed_basic' &&
+      enrollmentCandidate?.trackId === trackId
+    );
+  }
+  function rejectEnrollment(message) {
+    session.enrollRequested = false;
+    session.frame = null;
+    publish({ status: 'ready_to_enroll', error: message, liveness: challenge.snapshot() });
   }
   async function finish(outcome, extracted = {}, score = null, window = {}) {
     if (!session || session.completed) return;
@@ -76,14 +117,20 @@ export function createLiveFaceWorkflow({
       signal: controller.signal,
       prepared: {
         outcome,
-        extracted: { ...extracted, ...thumb },
+        extracted: {
+          ...extracted,
+          ...thumb,
+          reasonCode: outcome === 'NO_MATCH' ? 'BELOW_MATCH_THRESHOLD' : extracted.reasonCode,
+        },
         similarity: score,
         sessionId: session.id,
         expectedTemplateId: session.person.activeTemplateId,
         liveness: {
           ...live,
           method: 'active_head_turn_v1',
-          policyVersion: 'head-turn-v1',
+          policyVersion: 'head-turn-v2',
+          sessionId: session.id,
+          trackId,
           timingPolicyVersion: LIVE_TIMING.version,
           timingPolicy: LIVE_TIMING,
           assetIdentity: liveness.manifest?.sha256 ?? null,
@@ -102,7 +149,7 @@ export function createLiveFaceWorkflow({
     });
     if (token !== generation) return;
     session.frame = null;
-    lastExtracted = null;
+    enrollmentCandidate = null;
     publish({ status: result.persisted ? 'completed' : 'save_failed', result, similarity: null });
   }
   return {
@@ -160,7 +207,7 @@ export function createLiveFaceWorkflow({
           template: structuredClone(template),
           settings: { ...db.settings },
           startedAt: new Date().toISOString(),
-          start: now(),
+          acquiringSince: now(),
           maxFaces: 0,
           completed: false,
         };
@@ -175,13 +222,18 @@ export function createLiveFaceWorkflow({
       try {
         if (session && !session.completed && !valid())
           throw new Error('Person, enrollment or storage access changed. Start again.');
-        const comparing =
-          session && !session.completed && challenge.snapshot().status === 'passed_basic';
+        const passed = challenge.snapshot().status === 'passed_basic';
+        const enrollmentCaptureRequested = Boolean(
+          session?.purpose === 'enroll' &&
+            session.enrollRequested &&
+            timestamp >= session.enrollRequestedAt,
+        );
         const includeEmbedding = Boolean(
           session &&
             !session.completed &&
-            timestamp - lastComparison >= 334 &&
-            (!challenge.snapshot().challengeId || comparing),
+            (session.purpose === 'enroll'
+              ? passed && (!enrollmentCandidate || enrollmentCaptureRequested)
+              : timestamp - lastComparison >= 334 && (!challenge.snapshot().challengeId || passed)),
         );
         const extracted = await engine.analyzeFrame(frame, { includeEmbedding });
         if (token !== generation) return;
@@ -198,7 +250,11 @@ export function createLiveFaceWorkflow({
         });
         if (!session || session.completed) return;
         session.maxFaces = Math.max(session.maxFaces, tracked.faces.length);
-        if (timestamp - session.start >= 45000) {
+        if (
+          !challenge.snapshot().challengeId &&
+          (tracked.faces.length !== 1 || tracked.ambiguous) &&
+          timestamp - session.acquiringSince >= 45000
+        ) {
           await finish(
             tracked.faces.length > 1
               ? 'MULTIPLE_FACES'
@@ -210,21 +266,47 @@ export function createLiveFaceWorkflow({
           );
           return;
         }
-        if (tracked.faces.length !== 1 || tracked.ambiguous || extracted.faces[0]?.reasonCode) {
+        if (tracked.faces.length > 1 || tracked.ambiguous) {
           clearEvidence();
-          publish({
-            status:
-              tracked.faces.length > 1
-                ? 'multiple_faces'
-                : !tracked.faces.length
-                  ? 'no_face'
-                  : 'quality_blocked',
-          });
+          publish({ status: tracked.faces.length > 1 ? 'multiple_faces' : 'quality_blocked' });
+          return;
+        }
+        if (!tracked.faces.length) {
+          if (
+            lastFaceSeenAt !== null &&
+            timestamp - lastFaceSeenAt > LIVE_TIMING.maxObservationGapMs
+          )
+            clearEvidence();
+          else pauseEvidence();
+          publish({ status: 'no_face' });
           return;
         }
         const face = tracked.faces[0];
         if (trackId !== null && trackId !== face.trackId) clearEvidence();
         trackId = face.trackId;
+        lastFaceSeenAt = timestamp;
+        session.acquiringSince = timestamp;
+        if (hasEnrollmentCapture() && !enrollmentCaptureRequested) {
+          publish({
+            status: session.enrollRequested ? 'capturing_enrollment' : 'ready_to_enroll',
+            liveness: challenge.snapshot(),
+          });
+          return;
+        }
+        if (extracted.faces[0]?.reasonCode) {
+          if (enrollmentCaptureRequested && hasEnrollmentCapture()) {
+            rejectEnrollment(
+              'Capture quality is not ready. Face the camera in even lighting, then try enrollment again.',
+            );
+            return;
+          }
+          pauseEvidence();
+          publish({ status: 'quality_blocked' });
+          return;
+        }
+        // Detection keeps the same track while waiting. A click requests one new
+        // pose observation; it must not restart the already completed challenge.
+        if (enrollmentCaptureRequested && hasEnrollmentCapture()) challenge.pause();
         const pose = await liveness.observe(frame, timestamp);
         if (token !== generation) return;
         const fresh = now() - timestamp <= LIVE_TIMING.maxFrameAgeMs;
@@ -234,57 +316,107 @@ export function createLiveFaceWorkflow({
           return;
         }
         if (!pose.box || boxIoU(pose.box, face.box) < 0.35 || !Number.isFinite(pose.yaw)) {
-          clearEvidence();
+          if (enrollmentCaptureRequested && hasEnrollmentCapture()) {
+            rejectEnrollment(
+              'Keep your face in view and try enrollment again. Your completed steps are retained.',
+            );
+            return;
+          }
+          pauseEvidence();
           publish({ status: 'quality_blocked' });
           return;
         }
         const live = challenge.update({ yaw: pose.yaw, timestamp, fresh });
-        publish({
+        const observation = {
           liveness: structuredClone(live),
-          status: live.status === 'passed_basic' ? 'comparing' : 'challenging',
           yaw: pose.yaw,
-        });
+        };
         if (live.status === 'failed') {
+          publish(observation);
           await finish('LIVENESS_FAILED');
           return;
         }
         if (live.status === 'expired') {
+          publish(observation);
           await finish('LIVENESS_EXPIRED');
           return;
         }
-        if (!fresh || Math.abs(pose.yaw) > 10) {
+        if (live.status === 'passed_basic' && !currentPass(live)) {
           stable.reset();
-          publish({ similarity: null });
+          enrollmentCandidate = null;
+          publish({ ...observation, status: 'quality_blocked', similarity: null });
           return;
         }
-        if (extracted.embedding) {
-          lastComparison = timestamp;
-          lastExtracted = extracted;
-          if (live.status !== 'passed_basic') session.baselineEmbedding ??= extracted.embedding;
-          if (
-            live.status === 'passed_basic' &&
-            (!session.baselineEmbedding ||
-              cosineSimilarity(extracted.embedding, session.baselineEmbedding) <= 0.85)
-          ) {
-            clearEvidence();
-            publish({ status: 'quality_blocked' });
+        if (!fresh || Math.abs(pose.yaw - (live.neutralYaw ?? 0)) > 10) {
+          if (enrollmentCaptureRequested && hasEnrollmentCapture()) {
+            rejectEnrollment(
+              'Look straight ahead, then try enrollment again. Your completed steps are retained.',
+            );
             return;
           }
+          stable.reset();
+          if (session.purpose === 'enroll') {
+            session.frame = null;
+            session.enrollRequested = false;
+          }
+          publish({
+            ...observation,
+            similarity: null,
+            status: live.status === 'passed_basic' ? 'quality_blocked' : 'challenging',
+          });
+          return;
+        }
+        let matchWindow = null;
+        let similarity = state.similarity;
+        if (extracted.embedding) {
+          lastComparison = timestamp;
           if (session.purpose === 'verify') {
             const score = cosineSimilarity(extracted.embedding, session.template.embedding);
-            publish({ similarity: score });
+            similarity = score;
             if (live.status === 'passed_basic') {
-              const window = stable.observe(score, timestamp);
-              if (window.outcome) {
-                session.frame = frame;
-                await finish(window.outcome, extracted, window.score, window);
-              }
+              matchWindow = stable.observe(score, timestamp);
             }
           } else if (live.status === 'passed_basic') {
-            session.frame = frame;
-            publish({ status: 'ready_to_enroll' });
-            if (session.enrollRequested) await finish('ENROLLED', extracted);
+            if (
+              enrollmentCaptureRequested &&
+              enrollmentCandidate &&
+              cosineSimilarity(extracted.embedding, enrollmentCandidate.embedding) <= 0.85
+            ) {
+              rejectEnrollment(
+                'This capture differs from the completed challenge. Face the camera and try again, or restart for a different person.',
+              );
+              return;
+            }
+            if (!enrollmentCandidate)
+              enrollmentCandidate = {
+                trackId,
+                capturedAt: timestamp,
+                embedding: [...extracted.embedding],
+              };
+            if (enrollmentCaptureRequested) session.frame = frame;
           }
+        }
+        const status =
+          live.status !== 'passed_basic'
+            ? 'challenging'
+            : session.purpose === 'verify'
+              ? 'comparing'
+              : session.enrollRequested
+                ? 'capturing_enrollment'
+                : canEnroll()
+                  ? 'ready_to_enroll'
+                  : 'preparing_enrollment';
+        publish({ ...observation, similarity, status });
+        if (matchWindow?.outcome) {
+          session.frame = frame;
+          await finish(matchWindow.outcome, extracted, matchWindow.score, matchWindow);
+        } else if (
+          session.purpose === 'enroll' &&
+          enrollmentCaptureRequested &&
+          extracted.embedding &&
+          canEnroll()
+        ) {
+          await finish('ENROLLED', extracted);
         }
       } finally {
         processing = false;
@@ -296,13 +428,14 @@ export function createLiveFaceWorkflow({
     async enroll() {
       if (
         state.status !== 'ready_to_enroll' ||
-        !lastExtracted ||
+        !canEnroll() ||
         now() - state.lastFrameAt > LIVE_TIMING.maxFrameAgeMs ||
-        now() > challenge.snapshot().expiresAt ||
         state.faces.length !== 1
       )
         throw new Error('Hold still and complete a fresh liveness check first.');
       session.enrollRequested = true;
+      session.enrollRequestedAt = now();
+      publish({ status: 'capturing_enrollment', error: null });
     },
     async retry() {
       const result = await workflow.retrySave(state.result.attemptId);

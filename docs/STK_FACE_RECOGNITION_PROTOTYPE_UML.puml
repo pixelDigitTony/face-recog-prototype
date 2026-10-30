@@ -1,6 +1,6 @@
 ' Implemented frontend prototype; acceptance evidence: IMPLEMENTATION.md.
 ' Companion: STK_FACE_RECOGNITION_PROTOTYPE_SPEC.md
-' Seven named diagrams: original capture baseline plus implemented live sequence/state.
+' Eight named diagrams: capture/enrollment baseline plus automatic identification.
 
 @startuml stk_face_prototype_components
 title STK face prototype - frontend component boundaries
@@ -26,6 +26,7 @@ node "Browser - prototype origin" as Browser {
   component "BrowserFaceEngine\nworker client" as Engine
   component "Camera hook\ngetUserMedia and Canvas" as Camera
   component "LiveFaceWorkflow\nsession / tracking / >85% gate" as Live
+  component "LiveIdentificationWorkflow\ngallery / per-face windows / deduplication" as Identify
   component "Frame scheduler\none pipeline in flight" as Scheduler
   component "Liveness worker\nMediaPipe Face Landmarker" as Liveness
   node "Dedicated Web Worker" as Worker {
@@ -44,6 +45,9 @@ Feature --> Camera : explicit camera controls
 Camera --> Workflow : captured frame
 Camera --> Scheduler : sampled frame
 Scheduler --> Live : analyze, never queue video
+Scheduler --> Identify : automatic scan; no selected person
+Identify --> Engine : gallery + detect / extract selected faces
+Identify --> RepositoryPort : immutable identification event
 Live --> Engine : all boxes / optional embedding
 Live --> Liveness : single face pose evidence
 Live --> Workflow : one prepared terminal attempt
@@ -61,13 +65,14 @@ Files --> Shell : static downloads only
 Files --> Adapters : static model/runtime assets
 
 note bottom of Workflow
-  Only 1:1 verification of the selected person.
+  Enrollment and diagnostic 1:1 operations remain separate.
+  Automatic scan searches the local gallery per tracked face.
   Similarity and liveness are separate concepts.
   All prototype decisions are non-authoritative.
 end note
 
 note bottom of Storage
-  People, templates, capture attempts, settings and metadata.
+  People, templates, attempts, identification events, settings.
   Other tabs are read-only; no remote database or API.
   No model binaries or full video in localStorage.
 end note
@@ -86,7 +91,7 @@ skinparam classAttributeIconSize 0
 skinparam shadowing false
 
 class PrototypeDatabase {
-  schemaVersion : integer = 1
+  schemaVersion : integer = 3
   databaseId : UUID
   revision : integer
   createdAt : UTC timestamp
@@ -105,6 +110,21 @@ class Person {
   acknowledgedAt : UTC timestamp or null
   activeTemplateId : UUID or null
   createdAt / updatedAt : UTC timestamps
+}
+
+class IdentificationEvent {
+  id / sessionId / encounterId : UUID
+  trackId : temporary integer
+  purpose : identify
+  outcome : IDENTIFIED | UNKNOWN | AMBIGUOUS
+  personId / templateId : UUID or null
+  galleryVersion : SHA256
+  similarity / runnerUpSimilarity / margin : raw scores
+  samples : exactly 3 bounded observations
+  decisionPolicyVersion : identify-85-strict-v1
+  livenessStatus : not_checked
+  authoritative : false
+  probeEmbedding / thumbnailDataUrl : null
 }
 
 class FaceTemplate {
@@ -181,6 +201,8 @@ enum Outcome {
 PrototypeDatabase "1" *-- "0..50" Person
 PrototypeDatabase "1" *-- "0..50" FaceTemplate
 PrototypeDatabase "1" *-- "0..200" CaptureAttempt
+PrototypeDatabase "1" *-- "0..200" IdentificationEvent
+Person "0..1" -- "0..*" IdentificationEvent : identified history only
 PrototypeDatabase "1" *-- "1" Settings
 Person "1" -- "0..1" FaceTemplate : active enrollment
 Person "1" -- "0..*" CaptureAttempt : capture history
@@ -193,6 +215,7 @@ note bottom of PrototypeDatabase
   Storage key: stk:face-prototype:v1:environment:companyId:db
   Each successful mutation replaces one validated envelope.
   Actual byte capacity may be reached before record caps.
+  Attempts + identification events share the 200-record cap.
 end note
 
 note bottom of CaptureAttempt
@@ -353,14 +376,17 @@ loop one sampled pipeline at a time
   Live -> Recognition : detect all faces; optional embedding
   Recognition --> Live : every box + confidence + quality
   Live --> UI : temporary track IDs and all face details
-  alt multiple or missing / ambiguous face
+  alt multiple / ambiguous face or prolonged tracking loss
     Live -> Challenge : reset and revoke progress
     Live --> UI : verification paused; no per-frame writes
+  else brief missed detection
+    Live -> Challenge : pause; retain completed steps
   else exactly one usable continuous face
     Live -> Pose : same frame
     Pose --> Live : yaw + cross-check box
     Live -> Challenge : fresh timestamp + pose
     Challenge --> Live : random prompts / basic pass / failure
+    Live -> Live : compare directly with selected saved template
     Live --> UI : prompt and similarity, when available
     opt basic pass valid and three raw scores > 0.85 over >=600ms
       Live -> DB : atomic terminal attempt, fixed policy, evidence
@@ -386,13 +412,20 @@ Loading --> Error : missing assets / camera / read-only
 Tracking --> Challenging : one selected eligible face; neutral baseline
 Tracking --> Blocked : multiple / missing / quality / ambiguity
 Challenging --> Blocked : continuity lost; revoke challenge
-Blocked --> Challenging : reacquire; new randomized challenge
-Challenging --> Comparing : both turns and returns completed
-Challenging --> Saving : terminal timeout/failure
-Comparing --> Saving : stable match/no match or expired evidence
+Blocked --> Challenging : same track resumes steps; new track starts fresh
+Challenging --> Comparing : verification; both turns and returns completed
+Challenging --> PreparingEnrollment : enrollment; challenge completed
+Challenging --> Challenging : incorrect action / delay; retain completed steps
+Comparing --> Saving : stable match / no match with fresh observations
 Comparing --> Blocked : multiple faces / tracking lost
-Comparing --> EnrollmentReady : enrollment purpose + fresh pass
-EnrollmentReady --> Saving : explicit capture; next frame revalidates
+PreparingEnrollment --> EnrollmentReady : canonical post-challenge embedding ready
+PreparingEnrollment --> Blocked : missing / multiple face; quality / continuity blocked
+EnrollmentReady --> CapturingEnrollment : explicit capture; latch action
+EnrollmentReady --> EnrollmentReady : detection only; skip pose and identity checks
+EnrollmentReady --> Blocked : missing / multiple / ambiguous face; continuity lost
+CapturingEnrollment --> Saving : post-click fresh frame; valid pose / quality / candidate
+CapturingEnrollment --> EnrollmentReady : rejected capture; retain completed steps; show retry message
+CapturingEnrollment --> Blocked : tracking / context invalidated
 Saving --> Completed : atomic commit success
 Saving --> Unsaved : persistence failed
 Unsaved --> Saving : same attempt ID; no repeated inference
@@ -402,6 +435,9 @@ Tracking --> Stopped : stop / hide / navigation
 Blocked --> Stopped : stop / hide / navigation
 Challenging --> Stopped : stop / hide / navigation
 Comparing --> Stopped : stop / hide / navigation
+PreparingEnrollment --> Stopped : stop / hide / navigation
+EnrollmentReady --> Stopped : stop / hide / navigation
+CapturingEnrollment --> Stopped : stop / hide / navigation
 Stopped --> Loading : explicit restart
 Error --> Loading : explicit retry
 note right of Completed
@@ -472,5 +508,43 @@ note right of Disposed
   Stop camera tracks; dispose resources.
   Ignore late worker responses.
   No implicit success or partial enrollment.
+end note
+@enduml
+
+@startuml stk_automatic_identification
+title Automatic identification - continuous per-face decisions
+skinparam shadowing false
+actor Tester
+participant "Scan UI / camera" as UI
+participant "Identification coordinator" as Scan
+participant "YuNet / SFace worker" as Worker
+participant "Per-track windows" as Tracks
+database "localStorage schema 3" as DB
+Tester -> UI : Start scanning; no selected identity
+UI -> Scan : start current scope
+Scan -> DB : load and atomically migrate v1/v2
+Scan -> Worker : initialize recognition; setGallery(content hash)
+loop one pipeline at a time until Stop / hide / error
+  UI -> Scan : unmirrored frame + capture time
+  Scan -> Worker : detectFrame(frameId)
+  Worker --> Scan : all boxes + quality + detection IDs
+  Scan -> Tracks : associate tracks; invalidate affected crossings
+  Scan -> Worker : extractFaces(same frameId, at most 2 faces)
+  Worker --> Scan : independent full-gallery rankings
+  Scan -> Tracks : same winner + >85% + unique / margin >=0.05
+  Tracks --> Scan : 3 fresh samples spanning >=600ms
+  Scan --> UI : per-face names, scores or Unknown / Ambiguous
+  opt new deduplicated encounter outcome
+    Scan -> DB : validate exact gallery; atomic identification event
+    DB --> Scan : Saved locally or immutable unsaved event
+  end
+  Scan -> Worker : releaseFrame(frameId)
+end
+note over Scan, DB
+  No motion instructions or MediaPipe initialization on Scan.
+  Scan liveness = not_checked; authoritative = false.
+  Enrollment retains its separate active challenge.
+  One unsaved event pauses identification until retry/discard.
+  History writes do not change gallery version.
 end note
 @enduml
