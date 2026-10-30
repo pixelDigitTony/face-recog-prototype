@@ -77,6 +77,7 @@ export function ClosestRecord({ identification, compact = false }) {
           </Box>
         )}
         {!recognized && <Box>{status}</Box>}
+        {recognized && identification.tracked && <Box>Tracking confirmed face</Box>}
       </Box>
     </Stack>
   );

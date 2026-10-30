@@ -37,6 +37,8 @@ Completed challenge steps stay saved for the same tracked face during the camera
 
 Each face previews its closest record at any measured score; green still requires stable, unique acceptance. A missing enrollment photo uses a placeholder. Per-face **Low light**, **Overexposed** and **Uneven lighting** labels are advisory; Enroll adds corrective guidance without resetting completed steps. Use even frontal light and avoid bright windows behind the face. See the [closest-record and lighting specification](docs/STK_CLOSEST_FACE_MATCH_AND_LIGHTING_SPEC.md) for current policy and test criteria.
 
+After recognition, **Tracking confirmed face** keeps that identity/photo green while the same face remains continuously tracked. SFace stops comparing that track; **Confirmed similarity** retains the original accepted score. Disappearance or lost/ambiguous tracking requires a new confirmation. Other visible faces continue searching independently. Removing or replacing the confirmed enrollment also invalidates its label.
+
 Camera access needs localhost or HTTPS. Model loading is explicit and may take longer on the first visit. Ready sessions can run inference without network access; a cold offline reload is outside the MVP. Clearing browser data, changing origin/port, or using another profile creates a different local database.
 
 ## Storage behavior

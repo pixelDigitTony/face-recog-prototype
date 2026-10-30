@@ -529,7 +529,7 @@ loop one pipeline at a time until Stop / hide / error
   Scan -> Worker : detectFrame(frameId)
   Worker --> Scan : all boxes + quality + advisory lighting + detection IDs
   Scan -> Tracks : associate tracks; invalidate affected crossings
-  Scan -> Worker : extractFaces(same frameId, at most 2 faces)
+  Scan -> Worker : extractFaces(same frameId, at most 2 unconfirmed faces)
   Worker --> Scan : rankings + closestCandidate IDs/score (any score)
   Scan -> DB : resolve active candidate name and stored thumbnail
   DB --> Scan : current person/template snapshot or no candidate
@@ -537,6 +537,9 @@ loop one pipeline at a time until Stop / hide / error
   Scan -> Tracks : same winner + >=85% + unique / margin >=0.05
   Tracks --> Scan : 3 fresh samples spanning >=600ms
   Scan --> UI : green only after acceptance; amber for ambiguity/conflict
+  opt newly accepted unique identity
+    Scan -> Tracks : latch identity + confirmed similarity; skip further SFace
+  end
   opt advisory lighting warnings
     Scan --> UI : per-face Low light / Overexposed / Uneven lighting
   end
@@ -555,5 +558,9 @@ note over Scan, DB
   Candidate photos remain on main thread; never worker gallery/hash.
   Historical v1 events keep >85%; new v2 events use >=85%.
   Lighting feedback never changes challenge progress or match gates.
+  Confirmed tracks use geometry until disappearance / lost association.
+  Quality alone does not release a continuous confirmed face.
+  New competing tracks cannot revoke a confirmed owner.
+  Invalidating its active enrollment clears confirmation.
 end note
 @enduml

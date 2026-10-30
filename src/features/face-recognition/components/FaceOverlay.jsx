@@ -75,7 +75,8 @@ function FaceLabel({
         {similarity !== null && similarity !== undefined && (
           <>
             <br />
-            Similarity: {formatPercentage(similarity)}
+            {face.identification?.tracked ? 'Confirmed similarity: ' : 'Similarity: '}
+            {formatPercentage(similarity)}
           </>
         )}
       </Box>

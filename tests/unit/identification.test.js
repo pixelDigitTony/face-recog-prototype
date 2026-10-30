@@ -202,6 +202,121 @@ describe('automatic identity policy and gallery', () => {
   });
 });
 describe('continuous identification and persistence', () => {
+  it('escapes shifted-box ghost ambiguity, confirms, and keeps tracking without repeated matching', async () => {
+    const h = await harness();
+    await h.step(100);
+    h.setFaces([face(0, { box: [100, 20, 100, 120] })]);
+    await h.step(100);
+    const ids = [];
+    for (let i = 0; i < 30; i++) {
+      h.setFaces([face(0, { box: [60 + (i % 2), 20, 100, 120] })]);
+      await h.step(100);
+      ids.push(h.flow.getSnapshot().faces[0].trackId);
+    }
+    expect(new Set(ids.slice(1)).size).toBe(1);
+    expect(h.flow.getSnapshot().faces[0].identification).toMatchObject({
+      tracked: true,
+      person: { personId: 'p0' },
+    });
+    const comparisons = h.engine.extractFaces.mock.calls.length;
+    for (let i = 0; i < 10; i++) await h.step();
+    expect(h.engine.extractFaces).toHaveBeenCalledTimes(comparisons);
+    expect(h.events()).toHaveLength(1);
+    h.repo.dispose();
+  });
+  it('confirms once and only tracks the visible face through changed quality, pose and probe scores', async () => {
+    const h = await harness();
+    for (let i = 0; i < 3; i++) await h.step();
+    const before = h.engine.extractFaces.mock.calls.length;
+    const confirmation = h.flow.getSnapshot().faces[0].identification.confirmedAt;
+    h.setProbes([vector(1)]);
+    for (let i = 0; i < 30; i++) {
+      h.setFaces([face(0, { box: [20 + i, 20, 100, 120], reasonCode: 'BLURRED_FACE' })]);
+      await h.step();
+      h.flow.stale();
+    }
+    expect(h.engine.extractFaces).toHaveBeenCalledTimes(before);
+    expect(h.engine.detectFrame.mock.calls.length).toBe(33);
+    expect(h.flow.getSnapshot().faces[0].identification).toMatchObject({
+      status: 'identified',
+      tracked: true,
+      confirmedAt: confirmation,
+      person: { personId: 'p0' },
+      similarity: 1,
+    });
+    expect(h.events()).toHaveLength(1);
+    h.repo.dispose();
+  });
+  it('requires a new stable confirmation after disappearance even when the tracker reuses its ID', async () => {
+    const h = await harness();
+    for (let i = 0; i < 3; i++) await h.step();
+    const old = h.flow.getSnapshot().faces[0];
+    h.setFaces([]);
+    await h.step();
+    h.setFaces([face(0)]);
+    await h.step();
+    expect(h.flow.getSnapshot().faces[0].trackId).toBe(old.trackId);
+    expect(h.flow.getSnapshot().faces[0].identification.tracked).toBe(false);
+    await h.step();
+    await h.step();
+    expect(h.flow.getSnapshot().faces[0].identification.tracked).toBe(true);
+    expect(h.engine.extractFaces).toHaveBeenCalledTimes(6);
+    expect(h.events()).toHaveLength(1);
+    h.repo.dispose();
+  });
+  it('keeps a confirmed owner while another face searches, and releases the identity when its owner disappears', async () => {
+    const h = await harness();
+    for (let i = 0; i < 3; i++) await h.step();
+    h.setFaces([face(0), face(1)]);
+    h.setProbes([vector(0), vector(0)]);
+    for (let i = 0; i < 5; i++) await h.step();
+    const faces = h.flow.getSnapshot().faces;
+    expect(faces[0].identification).toMatchObject({ tracked: true, person: { personId: 'p0' } });
+    expect(faces[1].identification).toMatchObject({
+      tracked: false,
+      status: 'identity_conflict',
+      person: null,
+    });
+    expect(h.engine.extractFaces.mock.calls.slice(3).every((c) => c[1].join() === '1')).toBe(true);
+    h.setFaces([face(1)]);
+    for (let i = 0; i < 3; i++) await h.step();
+    expect(h.flow.getSnapshot().faces[0].identification).toMatchObject({
+      tracked: true,
+      person: { personId: 'p0' },
+    });
+    h.repo.dispose();
+  });
+  it('drops confirmation when geometry becomes ambiguous or the detection feed stalls', async () => {
+    const h = await harness();
+    for (let i = 0; i < 3; i++) await h.step();
+    h.setFaces([face(0), face(1, { box: [25, 20, 100, 120] })]);
+    await h.step();
+    expect(h.flow.getSnapshot().faces.every((f) => !f.identification.tracked)).toBe(true);
+    h.setFaces([face(0)]);
+    for (let i = 0; i < 4; i++) await h.step();
+    h.advance(1501);
+    h.flow.stale();
+    expect(h.flow.getSnapshot().faces).toHaveLength(0);
+    h.repo.dispose();
+  });
+  it('retains confirmation across unrelated gallery changes but invalidates a replaced template', async () => {
+    const h = await harness();
+    for (let i = 0; i < 3; i++) await h.step();
+    const before = h.engine.extractFaces.mock.calls.length;
+    await h.repo.commit({ type: 'deletePerson', id: 'p1' });
+    await h.step();
+    expect(h.flow.getSnapshot().faces[0].identification.tracked).toBe(true);
+    expect(h.engine.extractFaces).toHaveBeenCalledTimes(before);
+    const db = structuredClone(h.repo.getSnapshot().database);
+    db.templates[0].version++;
+    db.templates[0].embedding = vector(3);
+    h.storage.setItem('db', JSON.stringify(db));
+    await h.repo.refresh();
+    await h.step();
+    expect(h.flow.getSnapshot().faces[0].identification.tracked).toBe(false);
+    expect(h.engine.extractFaces).toHaveBeenCalledTimes(before + 1);
+    h.repo.dispose();
+  });
   it('previews independent closest records below cutoff without persisting candidate identities', async () => {
     const db = database();
     db.templates[0].thumbnailDataUrl = 'data:image/jpeg;base64,YQ==';
@@ -383,7 +498,10 @@ describe('continuous identification and persistence', () => {
       person: { ...h.repo.getSnapshot().database.people[0], displayName: 'New Name' },
     });
     for (let i = 0; i < 3; i++) await h.step();
-    expect(h.events()).toHaveLength(2);
+    expect(h.events()).toHaveLength(1);
+    expect(h.flow.getSnapshot().faces[0].identification.person.personSnapshot.displayName).toBe(
+      'New Name',
+    );
     h.repo.dispose();
   });
   it('discards gallery-stale extraction replies and stops late writes', async () => {
@@ -570,7 +688,7 @@ describe('continuous identification and persistence', () => {
     for (let i = 0; i < 3; i++) await h.step();
     await h.repo.commit({ type: 'savePerson', person });
     for (let i = 0; i < 3; i++) await h.step();
-    expect(h.events()).toHaveLength(2);
+    expect(h.events()).toHaveLength(1);
     expect(new Set(h.events().map((e) => e.encounterId)).size).toBe(1);
     h.repo.dispose();
   });

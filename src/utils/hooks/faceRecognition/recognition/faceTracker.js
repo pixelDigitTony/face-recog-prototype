@@ -16,10 +16,8 @@ export function createFaceTracker() {
     },
     update(faces, now) {
       const previous = tracks.filter((t) => now - t.seenAt <= LIVE_TIMING.maxObservationGapMs);
-      const used = new Set();
-      let ambiguous = false;
-      const current = faces.map((face) => {
-        const candidates = previous
+      const candidatesByFace = faces.map((face) =>
+        previous
           .map((t) => {
             const distance =
               Math.hypot(
@@ -29,15 +27,51 @@ export function createFaceTracker() {
             return { t, overlap: boxIoU(face.box, t.box), distance };
           })
           .filter((c) => c.overlap > 0.2 && c.distance < 0.6)
-          .sort((a, b) => b.overlap - a.overlap);
-        const candidate = candidates[0];
-        const uncertain = candidates.length > 1 || (candidate && used.has(candidate.t.trackId));
-        ambiguous ||= Boolean(uncertain);
-        const trackId = candidate && !uncertain ? candidate.t.trackId : nextId++;
-        used.add(trackId);
-        return { ...face, trackId, seenAt: now, ambiguous: Boolean(uncertain) };
+          .sort(
+            (a, b) => b.overlap - a.overlap || a.distance - b.distance || a.t.trackId - b.t.trackId,
+          ),
+      );
+      const claims = new Map();
+      const retired = new Set();
+      for (const candidates of candidatesByFace) {
+        for (const { t } of candidates) {
+          claims.set(t.trackId, (claims.get(t.trackId) ?? 0) + 1);
+          // An old box associated with a current detection must not survive as
+          // a second ghost beside its replacement. Otherwise ambiguity feeds
+          // itself and creates a new face ID on every subsequent frame.
+          retired.add(t.trackId);
+        }
+      }
+      const assignments = new Map(),
+        used = new Set();
+      const edges = candidatesByFace.flatMap((candidates, index) =>
+        candidates.map((c) => ({ ...c, index })),
+      );
+      edges.sort(
+        (a, b) =>
+          b.overlap - a.overlap ||
+          a.distance - b.distance ||
+          a.t.trackId - b.t.trackId ||
+          a.index - b.index,
+      );
+      for (const edge of edges) {
+        if (!assignments.has(edge.index) && !used.has(edge.t.trackId)) {
+          assignments.set(edge.index, edge.t.trackId);
+          used.add(edge.t.trackId);
+        }
+      }
+      const current = faces.map((face, index) => {
+        const candidates = candidatesByFace[index];
+        const uncertain =
+          candidates.length > 1 || candidates.some((c) => claims.get(c.t.trackId) > 1);
+        return {
+          ...face,
+          trackId: assignments.get(index) ?? nextId++,
+          seenAt: now,
+          ambiguous: uncertain,
+        };
       });
-      // Invalidate both sides of a shared association, independent of detection order.
+      // An uncertain region also invalidates any overlapping current face.
       for (const face of current) {
         if (face.ambiguous) {
           for (const other of current) {
@@ -45,8 +79,8 @@ export function createFaceTracker() {
           }
         }
       }
-      tracks = [...current, ...previous.filter((t) => !used.has(t.trackId))];
-      return { faces: current, ambiguous };
+      tracks = [...current, ...previous.filter((t) => !retired.has(t.trackId))];
+      return { faces: current, ambiguous: current.some((face) => face.ambiguous) };
     },
   };
 }

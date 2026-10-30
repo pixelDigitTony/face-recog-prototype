@@ -37,6 +37,7 @@ export function createLiveIdentificationWorkflow({
     t.ranking = null;
     t.status = status;
     t.similarity = null;
+    t.confirmedAt = null;
   }
   function resolveCandidate(candidate) {
     if (!candidate) return null;
@@ -68,6 +69,8 @@ export function createLiveIdentificationWorkflow({
         identification: {
           status: t?.status ?? 'searching',
           person: t?.person ?? null,
+          tracked: t?.confirmedAt != null,
+          confirmedAt: t?.confirmedAt ?? null,
           closestCandidate: resolveCandidate(t?.ranking?.closestCandidate),
           similarity: t?.similarity ?? null,
           analyzedAt: t?.analyzedAt ?? null,
@@ -92,8 +95,27 @@ export function createLiveIdentificationWorkflow({
       gallery = next;
       return false;
     }
+    const previousGallery = gallery;
     gallery = next;
-    for (const t of tracks.values()) clearTrack(t);
+    for (const t of tracks.values()) {
+      const prior = previousGallery?.entries.find((e) => e.personId === t.person?.personId);
+      const entry = next.entries.find((e) => e.personId === t.person?.personId);
+      // Unrelated enrollments and display-only edits do not invalidate a
+      // confirmed face. Its actual active biometric template must still match.
+      const fingerprint = (e) =>
+        JSON.stringify([
+          e.templateId,
+          e.templateVersion,
+          e.embedding,
+          e.modelIdentity,
+          e.preprocessingVersion,
+          e.enrollmentSource,
+          e.enrollmentLiveness,
+        ]);
+      if (t.confirmedAt != null && prior && entry && fingerprint(prior) === fingerprint(entry))
+        t.person = entry;
+      else clearTrack(t);
+    }
     cooldown.clear();
     await engine.setGallery(next);
     if (token === generation)
@@ -169,7 +191,7 @@ export function createLiveIdentificationWorkflow({
             { ...operation.event, persisted: false },
             ...state.recent.filter((r) => r.id !== operation.event.id),
           ].slice(0, 10),
-          faces: [],
+          faces: display(),
         });
       return false;
     }
@@ -236,7 +258,13 @@ export function createLiveIdentificationWorkflow({
             tracks.set(face.trackId, t);
           }
           t.seenAt = timestamp;
-          if (face.ambiguous || face.reasonCode || state.pending || !gallery.entries.length)
+          if (face.ambiguous) {
+            clearTrack(t);
+          } else if (t.confirmedAt != null) {
+            // Continue detection/geometry tracking, but never rerun SFace for
+            // this uninterrupted confirmed track, even if quality changes.
+            continue;
+          } else if (face.reasonCode || state.pending || !gallery.entries.length)
             clearTrack(
               t,
               face.reasonCode
@@ -258,6 +286,7 @@ export function createLiveIdentificationWorkflow({
             (f) =>
               !f.reasonCode &&
               !f.ambiguous &&
+              tracks.get(f.trackId).confirmedAt == null &&
               timestamp - tracks.get(f.trackId).lastCompared >= 334,
           )
           .sort(
@@ -281,7 +310,9 @@ export function createLiveIdentificationWorkflow({
           extracted.frameId !== frameId ||
           now() - timestamp > 1500
         ) {
-          for (const t of tracks.values()) clearTrack(t, 'waiting_for_analysis');
+          for (const t of tracks.values())
+            if (now() - timestamp > 1500 || t.confirmedAt == null)
+              clearTrack(t, 'waiting_for_analysis');
           publish({ faces: display(current) });
           return;
         }
@@ -317,18 +348,33 @@ export function createLiveIdentificationWorkflow({
         const owners = new Map();
         for (const face of current) {
           const t = tracks.get(face.trackId),
-            id = t?.ranking?.personId;
-          if (id && timestamp - t.analyzedAt <= 1500)
+            id = t?.person?.personId ?? t?.ranking?.personId;
+          if (id && (t.confirmedAt != null || timestamp - t.analyzedAt <= 1500))
             owners.set(id, [...(owners.get(id) ?? []), t]);
         }
         for (const group of owners.values())
           if (group.length > 1) {
+            const confirmed = group.filter((t) => t.confirmedAt != null);
             for (const t of group) {
+              // A newly seen lookalike cannot revoke the original face's
+              // confirmation. Conflicting unconfirmed tracks keep searching.
+              if (confirmed.length === 1 && t === confirmed[0]) continue;
               t.person = null;
+              t.confirmedAt = null;
               t.window.reset();
               t.status = 'identity_conflict';
             }
           }
+        for (const { t, decision } of decisions) {
+          if (decision.outcome === 'IDENTIFIED' && t.status !== 'identity_conflict') {
+            t.confirmedAt = timestamp;
+            t.similarity = decision.similarity;
+            t.ranking.closestCandidate = {
+              ...t.ranking.closestCandidate,
+              similarity: decision.similarity,
+            };
+          }
+        }
         publish({ status: 'scanning', faces: display(current) });
         for (const { t, face, decision } of decisions) {
           if (token !== generation) return;
@@ -386,8 +432,9 @@ export function createLiveIdentificationWorkflow({
         let changed = false;
         for (const t of tracks.values())
           if (
-            t.analyzedAt != null &&
-            now() - t.analyzedAt > 1500 &&
+            (t.confirmedAt != null
+              ? now() - t.seenAt > 1500
+              : t.analyzedAt != null && now() - t.analyzedAt > 1500) &&
             t.status !== 'waiting_for_analysis'
           ) {
             clearTrack(t, 'waiting_for_analysis');
@@ -400,7 +447,7 @@ export function createLiveIdentificationWorkflow({
       if (!state.pending) return;
       const token = generation;
       if (await save({ ...state.pending, signal: undefined }, token)) {
-        for (const t of tracks.values()) clearTrack(t);
+        for (const t of tracks.values()) if (t.confirmedAt == null) clearTrack(t);
         if (token === generation) publish({ status: 'scanning' });
       }
     },

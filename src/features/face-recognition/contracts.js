@@ -13,6 +13,11 @@
  * decision samples/events. quality.lighting is optional advisory metadata and
  * never changes enrollment readiness or recognition gates. New scan events use
  * identify-85-inclusive-v2; historical identify-85-strict-v1 retains its operator.
+ * Confirmed scan faces expose tracked:true and confirmedAt (monotonic ms).
+ * Their similarity is the saved confirmation score, not a new comparison.
+ * Detection continues, but SFace skips confirmed uninterrupted tracks. Loss,
+ * uncertain association, session disposal or invalid active enrollment clears
+ * confirmation. Unrelated gallery edits retain an unchanged confirmed template.
  * @typedef {{initialize:Function, observe:Function, dispose:Function}} LivenessEngine
  * @typedef {{start:Function, process:Function, stop:Function, enroll:Function, retry:Function, discard:Function, subscribe:Function, getSnapshot:Function}} LiveFaceWorkflow
  * @typedef {{load:Function, query:Function, commit:Function, exportJson:Function, reset:Function, subscribe:Function}} PrototypeRepository

@@ -65,6 +65,20 @@ Scan continues to have explicit Start/Stop and no person selector, movement chal
 
 ## 4. Recognition contracts and state lifecycle
 
+### Confirm once, then track — update 2026-10-30
+
+After one stable, unique IDENTIFIED decision, latch its identity, enrollment thumbnail and minimum accepted similarity to that uninterrupted face track. Keep running face detection and geometry association, but exclude the confirmed track from further SFace extraction/comparison. Display **Tracking confirmed face** and **Confirmed similarity** so the stored score is not mistaken for a fresh comparison. Unconfirmed faces continue searching independently.
+
+Quality, pose and lighting changes alone do not release a continuously detected, unambiguous confirmed track. The 1.5-second comparison-score expiry applies only to unconfirmed tracks; detection freshness still applies to every face. A missing detection, uncertain/crossing association, stale detection feed, Stop, route exit, tab hiding or camera/model failure ends that continuity. Reappearance requires the original three-sample confirmation again, even if the geometry tracker reuses an ID. Existing encounter deduplication and history cooldown still apply.
+
+A new unconfirmed track competing for an already confirmed person's identity stays amber; it does not revoke the established track. Two unconfirmed competing tracks remain unconfirmed. If continuity becomes ambiguous, clear affected identities rather than transfer a confirmed label across faces.
+
+Unrelated gallery changes, photo updates and display-name edits do not trigger reconfirmation. Removing/inactivating the confirmed person, replacing their actual active biometric template or changing its compatibility invalidates that confirmation. Update displayed names/photos from the current record. Saving/retrying a result does not itself release an otherwise continuous confirmation; explicit unsaved-result controls remain available.
+
+This update supersedes continuous comparison and quality-only/score-age invalidation for confirmed scan tracks in the earlier requirements below. Initial >=85% policy, history evidence, liveness semantics, schema and enrollment behavior remain unchanged. Acceptance additionally requires no embedding requests after confirmation across repeated detections/quality changes, fresh confirmation after loss, independent search for new faces, duplicate-identity ownership and preservation through unrelated gallery edits. This is prototype geometry tracking, not a fresh biometric identity check on every frame.
+
+Tracker recovery requirement: assign previous geometry IDs one-to-one for each frame and retire old candidate boxes represented by current detections. After a shifted detection overlaps a recently lost box and its replacement, ambiguity must resolve once geometry is stable; competing obsolete boxes must not generate a fresh ID on every frame. Preserve identity invalidation for genuinely ambiguous associations and the existing expiry for unmatched tracks.
+
 Extend the worker ranking result with a nullable presentation candidate:
 
 ```js

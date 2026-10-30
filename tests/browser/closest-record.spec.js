@@ -7,6 +7,8 @@ test('each tracked face shows its own closest photo, inclusive green state and a
   // covered separately by identification.spec.js and native-parity tests.
   await page.addInitScript(() => {
     window.scanScenario = 'low';
+    window.scanComparisonBatches = 0;
+    window.scanDetectionBatches = 0;
     navigator.mediaDevices.getUserMedia = async () => {
       const canvas = document.createElement('canvas');
       canvas.width = 640;
@@ -23,11 +25,13 @@ test('each tracked face shows its own closest photo, inclusive green state and a
         if (type === 'initialize')
           result = await (await fetch('/models/model-manifest.json')).json();
         if (type === 'setGallery') this.gallery = payload;
-        if (type === 'detectFrame')
+        if (type === 'detectFrame') {
+          window.scanDetectionBatches++;
+          const x = window.scanJitterX;
           result = {
-            faces: [0, 1].map((i) => ({
+            faces: (window.scanScenario === 'gone' ? [] : [0, 1]).map((i) => ({
               detectionId: i,
-              box: [i * 290 + 30, 180, 160, 180],
+              box: [i === 0 && x != null ? x : i * 290 + 30, 180, 160, 180],
               confidence: 0.99,
               landmarks: [],
               reasonCode: window.scanScenario === 'quality' ? 'BLURRED_FACE' : null,
@@ -39,7 +43,9 @@ test('each tracked face shows its own closest photo, inclusive green state and a
               },
             })),
           };
-        if (type === 'extractFaces')
+        }
+        if (type === 'extractFaces') {
+          window.scanComparisonBatches++;
           result = {
             frameId: payload.frameId,
             galleryVersion: payload.galleryVersion,
@@ -69,6 +75,7 @@ test('each tracked face shows its own closest photo, inclusive green state and a
               };
             }),
           };
+        }
         if (!this.stopped) this.onmessage?.({ data: { requestId, ok: true, result } });
       }
       terminate() {
@@ -137,6 +144,18 @@ test('each tracked face shows its own closest photo, inclusive green state and a
     page.getByRole('list', { name: 'Recent scan results' }).getByRole('listitem'),
   ).toHaveCount(2);
   await page.screenshot({ path: '.local/closest-record-amber-desktop.png', fullPage: true });
+  // Create a lost old box, then overlap it and its replacement. This previously
+  // produced a new ID every frame and prevented any stable match window.
+  await page.evaluate(() => {
+    window.scanJitterX = 170;
+  });
+  const detectionsBeforeShift = await page.evaluate(() => window.scanDetectionBatches);
+  await expect
+    .poll(() => page.evaluate(() => window.scanDetectionBatches))
+    .toBeGreaterThan(detectionsBeforeShift);
+  await page.evaluate(() => {
+    window.scanJitterX = 100;
+  });
   await page.evaluate(() => {
     window.scanScenario = 'exact';
   });
@@ -144,6 +163,20 @@ test('each tracked face shows its own closest photo, inclusive green state and a
   await expect(list).toContainText('Recognized: Closest 1');
   await expect(boxes.nth(0)).toHaveCSS('border-top-color', 'rgb(112, 227, 154)');
   await expect(labels.nth(0)).toContainText('Low light'); // advisory does not change acceptance
+  await expect(list).toContainText('Tracking confirmed face');
+  const heldIds = await boxes.evaluateAll((els) => els.map((e) => e.dataset.trackId));
+  const counts = await page.evaluate(() => {
+    window.scanScenario = 'quality';
+    return { detection: window.scanDetectionBatches, comparison: window.scanComparisonBatches };
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.scanDetectionBatches))
+    .toBeGreaterThan(counts.detection + 12);
+  expect(await page.evaluate(() => window.scanComparisonBatches)).toBe(counts.comparison);
+  expect(await boxes.evaluateAll((els) => els.map((e) => e.dataset.trackId))).toEqual(heldIds);
+  await expect(list).toContainText('Recognized: Closest 0');
+  await expect(list).toContainText('Confirmed similarity: 85.00%');
+  await expect(boxes.nth(0)).toHaveCSS('border-top-color', 'rgb(112, 227, 154)');
   await page.setViewportSize({ width: 390, height: 844 });
   await expect
     .poll(async () =>
@@ -174,6 +207,10 @@ test('each tracked face shows its own closest photo, inclusive green state and a
   );
   expect(labelRects[0].right).toBeLessThanOrEqual(labelRects[1].left);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.evaluate(() => {
+    window.scanScenario = 'gone';
+  });
+  await expect(boxes).toHaveCount(0);
   await page.evaluate(() => {
     window.scanScenario = 'conflict';
   });

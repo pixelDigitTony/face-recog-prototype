@@ -25,8 +25,9 @@ export function DetectedFacesList({
                 <>
                   <ClosestRecord identification={face.identification} />
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                    Similarity: {formatPercentage(face.identification.similarity)}
-                    {face.identification.ageMs == null
+                    {face.identification.tracked ? 'Confirmed similarity: ' : 'Similarity: '}
+                    {formatPercentage(face.identification.similarity)}
+                    {face.identification.tracked || face.identification.ageMs == null
                       ? ''
                       : ` · ${Math.round(face.identification.ageMs)} ms ago`}
                   </Typography>
