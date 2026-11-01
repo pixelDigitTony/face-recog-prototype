@@ -4,9 +4,9 @@ A standalone React JavaScript + MUI prototype for browser-local YuNet/SFace face
 
 ## Multiple appearances and evaluation
 
-Enroll retains up to five samples per person. Add face samples across days, such as with/without makeup or glasses; label, replace, delete and choose a primary sample individually. Each camera sample retains the enrollment challenge. Scan compares against every eligible sample and ranks each person by their best score. Changing the winning sample does not reset the person's stability window. Once confirmed, tracking continues without repeated SFace comparisons while its supporting references remain valid.
+Enroll retains up to five samples per person. Add face samples across days, such as with/without makeup or glasses; label, replace and delete samples individually. All eligible samples have equal standing. Settings controls left/right turns and optional blinking for future enrollment sessions; disabling all tests is explicitly recorded as not checked. Guided capture collects front/slight-left/slight-right references for atomic review and saving. Scan compares against every eligible sample and ranks each person by their best score. Changing the winning sample does not reset the person's stability window. Once confirmed, tracking continues without repeated SFace comparisons while its supporting references remain valid.
 
-**Evaluate recognition** collects fresh, manually labeled webcam trials for known and unenrolled participants. It compares primary-only and all-sample recognition, shows independent error categories and denominators, and explores 20–95% thresholds. The live 85% threshold stays fixed. Reports are marked outdated when references change; explicitly rerun compatible saved probes. Evaluation never creates enrollments or attendance/identification events. Full reference/video frames are not retained.
+**Evaluate recognition** collects fresh, manually labeled webcam trials for known and unenrolled participants. It evaluates all eligible samples, preserves historical paired reports, shows independent error categories and denominators, and explores 20–95% thresholds. The live 85% threshold stays fixed. Reports are marked outdated when references change; explicitly rerun compatible saved probes. Evaluation never creates enrollments or attendance/identification events. Full reference/video frames are not retained.
 
 See [the multi-sample specification](docs/ANTHONYS_FACE_LAB_MULTI_SAMPLE_EVALUATION_SPEC.md). Physical-camera and held-out participant evaluation remain necessary before choosing a different threshold.
 
@@ -31,9 +31,9 @@ npm.cmd run dev
 
 ## Try it
 
-1. On **Enroll**, click **+**, enter an employee code and name, acknowledge browser storage, and save the person.
+1. On **Enroll**, click **Start live scan**. Faces are compared automatically against all eligible enrollees. Each unmatched, stable face gets its own name field in **Current match similarity**. Multiple people can enroll together. Enter its name and press **Enter** to confirm browser-local storage and begin enrollment. An internal code is generated; no person selector or employee-code entry is needed.
 
-2. Click **Start live scan**. Keep one face visible, look straight ahead, then follow the randomized left/right head-turn and return prompts. After basic liveness passes, click **Capture & enroll** (or explicitly replace an enrollment).
+2. Keep each named face visible and follow the enabled prompts in its own face box (turns default on; blink default off). Capture starts automatically when ready. The name and sample save atomically, so failed or abandoned new captures leave no empty person. Existing faces show their matched record; explicitly choose **Add face sample** or replace a sample to extend it. Every visible face keeps its own match analysis, percentage, closest-reference thumbnail and status. Several named faces can capture independently. Ambiguous or lost association blocks only the affected person, without resetting other people's progress.
 
 3. On **Scan face**, click **Start scanning**. Each face shows its own closest enrolled record, stored thumbnail and similarity. Amber means unconfirmed, below 85%, ambiguous or conflicting. Three consistent comparisons **at least 85%**, with a unique winner and a 0.05 raw-score separation from the runner-up, turn that face green. Exactly 85% qualifies. Closest suggestions below threshold remain Unknown in history. Scanning continues automatically and suppresses duplicate rows.
 
@@ -41,9 +41,9 @@ npm.cmd run dev
 
 5. Use **Settings** to change thumbnail retention. Scan uses raw cosine >= 0.85 with stability/uniqueness; enrollment consistency retains > 0.85. **Export JSON** includes the entire database. Deletion and reset always require an explicit action.
 
-**Use test image** opens the diagnostic capture flow. It runs the real models, displays similarity and saves diagnostic records, but cannot complete liveness or produce a live match. Image-created templates are excluded from live verification. Fixtures under `tests/fixtures/` are never automatically seeded into localStorage.
+**Diagnostic image enrollment** and **Diagnostic image comparison** in Settings open the diagnostic capture flows. It runs the real models, displays similarity and saves diagnostic records, but cannot complete liveness or produce a live match. Image-created templates are excluded from live verification. Fixtures under `tests/fixtures/` are never automatically seeded into localStorage.
 
-Completed challenge steps stay saved for the same tracked face during the camera session. Wrong movements or delays let you retry the current instruction; they do not clear earlier passed steps. After completion and preparation of a reference capture, **Capture & enroll** stays enabled while the single face remains tracked. Detection continues; pose and identity checks run again only when you click. A rejected capture explains what to correct and retains the completed steps for retry. Changing/lost tracking, multiple faces, or restarting the camera starts a new challenge.
+Completed challenge steps stay saved for the same tracked face during the camera session. Wrong movements or delays retry the current instruction and retain earlier passed steps. Capture starts automatically once configured checks and a fresh same-pose reference are ready. A rejected capture explains what to correct and retains completed steps for retry. Changing/lost or ambiguous tracking invalidates only the affected enrollment session. Other named faces continue. Stop cancels unsaved sessions; save or discard sealed reviews before restarting the group.
 
 **Scan face** searches the complete eligible local gallery independently for each tracked face. It performs similarity identification with **liveness not checked**; enrollment's earlier motion challenge is separate provenance. Being enrolled does not guarantee a score above the requested cutoff. **Settings → Diagnostic image comparison** retains selected-person image testing separately from automatic scanning.
 
@@ -61,7 +61,7 @@ Limits are 50 people, five samples per person, 100 evaluation trials, 200 combin
 
 Retained thumbnails are at most 96 × 96 JPEG and 4,096 characters. Embeddings contain 128 normalized numeric values. Full video and source frames are not retained. Corrupt or unsupported data is preserved for download; recovery never silently resets the database. Reset touches only the prototype's scoped key.
 
-Schema 1/2/3 migrates atomically to schema 4 under the existing writer lock and key. Historical scores, outcomes and threshold snapshots remain unchanged; old templates show that enrollment liveness was not checked. Historical identification v1 uses >85%; historical v2 uses >=85%; new v3 uses >=85% with person-level multi-sample ranking. Export before upgrading when you need a backup. Failed migration preserves original data for recovery.
+Schema 1/2/3/4 migrates atomically to schema 5 under the existing writer lock and key. Historical scores, outcomes and threshold snapshots remain unchanged; old templates show that enrollment liveness was not checked. Historical identification v1 uses >85%; historical v2 uses >=85%; new v3 uses >=85% with person-level multi-sample ranking. Export before upgrading when you need a backup. Failed migration preserves original data for recovery.
 
 This is a local test database accessible to scripts on the same origin. Results remain non-authoritative. MediaPipe landmarks support a **basic randomized motion challenge**, not validated passive anti-spoofing. Photo/video replay, masks and virtual-camera injection remain unvalidated. Similarity percentage is a raw score conversion, not identity probability; 0.85 is much stricter than the former experimental 0.363 threshold. Target-user/camera calibration and production STK authorization remain separate acceptance work.
 
@@ -139,3 +139,47 @@ The included `vercel.json` rewrites page requests to `index.html` so React Route
 Exact model provenance and hashes are in `asset-lock.json`; input/output conventions and quality gates are in `public/models/model-manifest.json`. The detector uses its declared **640 × 640** input and BGR 0–255 planes. Five-point alignment produces a **112 × 112** RGB SFace input without unrelated pixel normalization. The OpenCV.js UMD wrapper has a documented `globalThis` adaptation for module workers in `setup-assets.mjs`; the underlying package is pinned.
 
 Current automatic identification uses `identify-85-inclusive-v2`: cosine >= 0.85, stable and unique. Historical `identify-85-strict-v1` and enrollment consistency retain > 0.85. These thresholds are not calibrated for STK. The MediaPipe 1.2.0 package, Face Landmarker bundle revision 1 and local runtime hashes are recorded in `public/models/liveness-manifest.json`. `setup:assets` also prepares these assets; `node scripts/setup-liveness.mjs` prepares them independently. A model/hash/preprocessing change requires compatible enrollment or re-enrollment. Review code/model notices in `public/licenses/` before redistribution. Development fixtures are excluded from the production build.
+
+## Configurable enrollment and guided sets
+
+Choose **Add one sample** or **Guided set — three samples** on Enroll. Guided mode requires three free slots, completes configured liveness once, then captures front, slight left and slight right. On Enroll, capture runs automatically at each ready pose after name confirmation or an explicit add/replace action. Review each person's sealed samples while the camera and other people continue, then **Save three samples** for that person. Failed storage leaves the review available; discard never removes existing samples. Exactly 85% qualifies on Scan; enrollment capture consistency remains strictly above 85% against its own same-pose candidate.
+
+Settings offers independent **Turn left**, **Turn right** and **Blink** switches. Changes apply to the next session. Every enabled test is required; all disabled records **Not checked — disabled in Settings**. Blink uses observed open/closed/open eye scores through the existing MediaPipe worker; low sampling cadence cannot silently pass it. This remains basic liveness, with physical-camera replay resistance unvalidated.
+
+Current behavior and acceptance requirements: [equal samples and configurable liveness specification](docs/ANTHONYS_FACE_LAB_SAMPLE_MATCHING_AND_CONFIGURABLE_LIVENESS_SPEC.md). Scan keeps its confirmed reference and score while tracking the same face; new evaluation reports use every eligible sample without a primary baseline.
+
+### Curated sample comparison
+
+Evaluate offers **Compare 1 / 3 / 5 samples** alongside all-samples evaluation.
+Load models, select a cohort and order each person's references, then freeze the
+experiment. Each selected person needs at least three eligible references;
+five each enables the third comparison. The first reference is an evaluation
+baseline only; live Scan still uses every eligible reference.
+
+Record actual identity, a capture-session label, lighting, appearance and pose.
+Use separately captured probes and include genuinely non-enrolled participants.
+The same three observations are replayed against each nested reference set at
+85%, with the existing margin, uniqueness and stability rules. Results separate
+correct, missed, wrong-person and unknown outcomes, with paired changes and
+participant breakdowns. Reference changes make results historical; they never
+silently substitute new samples. The comparison report export omits probe vectors;
+full database export includes biometric vectors. Keep the 100-trial/3 MiB limits
+in mind when designing pilot batches.
+
+See [the curated-sample specification](docs/ANTHONYS_FACE_LAB_CURATED_SAMPLES_AND_COMPARATIVE_EVALUATION_SPEC.md).
+
+## Multiple enrollment capture
+
+Each face card owns its name confirmation, immutable liveness settings, challenge
+steps, capture consistency checks, optional three-sample review and pending save.
+A shared MediaPipe worker returns up to ten poses and optional eye-blink scores;
+exclusive overlap matching associates those observations with tracked faces.
+The order returned by the two models is never treated as identity.
+
+New automatic captures use `enrollment-per-face-liveness-v2`. History records the
+actual scene face count separately from the single target, plus track/detection
+IDs, capture/pose timestamps and bounding-box association evidence. Historical
+single-face policies retain their original rules. Schema 5 and storage limits
+remain. Writes are atomic per person; retrying one failed capture does not repeat
+or discard another person's saved or pending capture. Physical-camera throughput
+and usability with a group still require evaluation.

@@ -1,5 +1,9 @@
 export function createFaceLandmarkerAdapter(baseUrl) {
-  let worker, initializing, manifest;
+  let worker,
+    initializing,
+    manifest,
+    blink = false,
+    numFaces = 1;
   const pending = new Map();
   function call(type, payload) {
     return new Promise((resolve, reject) => {
@@ -32,7 +36,15 @@ export function createFaceLandmarkerAdapter(baseUrl) {
     get manifest() {
       return manifest;
     },
-    initialize() {
+    initialize(options) {
+      const requestedFaces = options?.numFaces ?? numFaces;
+      if (!Number.isInteger(requestedFaces) || requestedFaces < 1 || requestedFaces > 10)
+        throw new Error('Liveness supports one to ten faces.');
+      if (options && (Boolean(options.blink) !== blink || requestedFaces !== numFaces)) {
+        dispose();
+        blink = Boolean(options.blink);
+        numFaces = requestedFaces;
+      }
       return (initializing ||= (async () => {
         worker = new Worker(new URL('../../../../workers/liveness.worker.js', import.meta.url));
         worker.onmessage = ({ data }) => {
@@ -45,7 +57,7 @@ export function createFaceLandmarkerAdapter(baseUrl) {
             task.reject(new Error(event.message || 'Liveness worker failed.'));
         };
         try {
-          manifest = await call('initialize', { baseUrl });
+          manifest = await call('initialize', { baseUrl, blink, numFaces });
           return manifest;
         } catch (error) {
           dispose();

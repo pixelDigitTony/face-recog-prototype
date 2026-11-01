@@ -1,3 +1,9 @@
+import {
+  validateLivenessSettings,
+  validateEnrollmentEvidence,
+  ENROLLMENT_POLICY,
+  MULTI_ENROLLMENT_POLICY,
+} from '../liveness/livenessPolicy';
 import { validateEvaluationTrial } from '../recognition/evaluation';
 import { defaultSettings, OUTCOMES } from '@/features/face-recognition/constants';
 import { percentage, LIVE_POLICY } from '../recognition/matchPolicy';
@@ -7,7 +13,7 @@ import { validateIdentificationEvent } from './validateIdentificationEvent';
 export function createDatabase(scope) {
   const now = new Date().toISOString();
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     databaseId: crypto.randomUUID(),
     revision: 0,
     createdAt: now,
@@ -18,7 +24,7 @@ export function createDatabase(scope) {
     attempts: [],
     identificationEvents: [],
     evaluationTrials: [],
-    settings: { ...defaultSettings },
+    settings: structuredClone(defaultSettings),
   };
 }
 export function fail(message, code = 'VALIDATION_ERROR') {
@@ -31,7 +37,7 @@ export function validateEmbedding(value) {
   if (Math.abs(norm - 1) > 0.005) fail('Embedding must be normalized.');
 }
 export function validateDatabase(db, scope, legacy = false) {
-  if (!db || db.schemaVersion !== (legacy === true ? 1 : typeof legacy === 'number' ? legacy : 4))
+  if (!db || db.schemaVersion !== (legacy === true ? 1 : typeof legacy === 'number' ? legacy : 5))
     fail(
       'Unsupported database schema. Export the original data or reset this prototype.',
       'SCHEMA_ERROR',
@@ -43,6 +49,7 @@ export function validateDatabase(db, scope, legacy = false) {
   for (const key of ['createdAt', 'updatedAt'])
     if (!Number.isFinite(Date.parse(db[key]))) fail('Invalid database timestamp.');
   const settings = db.settings;
+  if (db.schemaVersion >= 5) validateLivenessSettings(settings?.enrollmentLiveness);
   if (legacy !== true && settings?.matchThreshold !== 0.85)
     fail('Live matching requires strictly above 85%.');
   if (
@@ -60,7 +67,7 @@ export function validateDatabase(db, scope, legacy = false) {
     'templates',
     'attempts',
     ...(db.schemaVersion >= 3 ? ['identificationEvents'] : []),
-    ...(db.schemaVersion === 4 ? ['evaluationTrials'] : []),
+    ...(db.schemaVersion >= 4 ? ['evaluationTrials'] : []),
   ]) {
     if (!Array.isArray(db[key])) fail(`Invalid ${key} collection.`);
     const ids = new Set();
@@ -94,6 +101,7 @@ export function validateDatabase(db, scope, legacy = false) {
       fail('Invalid or duplicate employee code.');
     codes.add(person.normalizedEmployeeCode);
     if (
+      db.schemaVersion < 5 &&
       (db.schemaVersion < 4 ? person.activeTemplateId : person.primaryTemplateId) &&
       !db.templates.some(
         (t) =>
@@ -103,14 +111,14 @@ export function validateDatabase(db, scope, legacy = false) {
     )
       fail('Person template link is invalid.');
   }
-  if (db.schemaVersion === 4) {
+  if (db.schemaVersion >= 4) {
     for (const person of db.people) {
       const count = db.templates.filter((t) => t.personId === person.id).length;
       if (
         !Number.isInteger(person.enrollmentRevision) ||
         person.enrollmentRevision < 0 ||
         count > 5 ||
-        Boolean(count) !== Boolean(person.primaryTemplateId)
+        (db.schemaVersion === 4 && Boolean(count) !== Boolean(person.primaryTemplateId))
       )
         fail('Invalid sample set.');
     }
@@ -130,7 +138,7 @@ export function validateDatabase(db, scope, legacy = false) {
       fail('Invalid active template.');
     templatePeople.add(template.personId);
     if (
-      db.schemaVersion === 4 &&
+      db.schemaVersion >= 4 &&
       (typeof template.label !== 'string' || !template.label.trim() || template.label.length > 60)
     )
       fail('Invalid sample label.');
@@ -163,6 +171,8 @@ export function validateDatabase(db, scope, legacy = false) {
       fail('Invalid similarity.');
     if (!Number.isFinite(attempt.thresholdSnapshot) || Math.abs(attempt.thresholdSnapshot) > 1)
       fail('Invalid threshold snapshot.');
+    if ([ENROLLMENT_POLICY, MULTI_ENROLLMENT_POLICY].includes(attempt.decisionPolicyVersion))
+      validateEnrollmentEvidence(attempt);
     if (attempt.decisionPolicyVersion === LIVE_POLICY) {
       if (['MATCH', 'ENROLLED'].includes(attempt.outcome)) {
         const live = attempt.liveness;

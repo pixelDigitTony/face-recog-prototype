@@ -1,4 +1,5 @@
-export const SCHEMA_VERSION = 4;
+import { DEFAULT_LIVENESS } from '@/utils/hooks/faceRecognition/liveness/livenessPolicy';
+export const SCHEMA_VERSION = 5;
 export const OUTCOMES = [
   'ENROLLED',
   'MATCH',
@@ -18,6 +19,7 @@ export const OUTCOMES = [
 ];
 export const defaultSettings = Object.freeze({
   matchThreshold: 0.85,
+  enrollmentLiveness: DEFAULT_LIVENESS,
   saveThumbnails: true,
   maxPeople: 50,
   maxAttempts: 200,

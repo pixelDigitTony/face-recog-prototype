@@ -1,3 +1,4 @@
+import { livenessLabel } from '@/utils/hooks/faceRecognition/liveness/livenessPolicy';
 import { Box, List, ListItem, Typography } from '@mui/material';
 import { formatPercentage } from '@/utils/hooks/faceRecognition/recognition/matchPolicy';
 import { ClosestRecord } from './ClosestRecord';
@@ -10,6 +11,7 @@ export function DetectedFacesList({
   person,
   liveness,
   identification = false,
+  purpose = 'verify',
 }) {
   return (
     <>
@@ -25,9 +27,9 @@ export function DetectedFacesList({
                 <>
                   <ClosestRecord identification={face.identification} />
                   <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                    {face.identification.tracked ? 'Confirmed similarity: ' : 'Similarity: '}
-                    {formatPercentage(face.identification.similarity)}
-                    {face.identification.tracked || face.identification.ageMs == null
+                    {face.identification?.tracked ? 'Confirmed similarity: ' : 'Similarity: '}
+                    {formatPercentage(face.identification?.similarity)}
+                    {face.identification?.tracked || face.identification?.ageMs == null
                       ? ''
                       : ` · ${Math.round(face.identification.ageMs)} ms ago`}
                   </Typography>
@@ -35,8 +37,8 @@ export function DetectedFacesList({
               ) : (
                 <Typography variant="body2" color="text.secondary">
                   {faces.length > 1
-                    ? 'Multiple faces — verification paused · Match: — · Liveness: not checked'
-                    : `${face.reasonCode?.replaceAll('_', ' ') || status.replaceAll('_', ' ')}${person ? ` · Verifying against ${person.displayName} (${person.employeeCode})` : ''} · Match: ${formatPercentage(similarity)} · Liveness: ${liveness.status.replaceAll('_', ' ')}`}
+                    ? `Multiple faces — ${purpose === 'enroll' ? 'enrollment' : 'verification'} paused · Match: — · Liveness: not checked`
+                    : `${face.reasonCode?.replaceAll('_', ' ') || status.replaceAll('_', ' ')}${person ? ` · Verifying against ${person.displayName} (${person.employeeCode})` : ''} · Match: ${formatPercentage(similarity)} · Liveness: ${livenessLabel(liveness)}`}
                 </Typography>
               )}
               <LightingFeedback lighting={face.quality?.lighting} guidance={!identification} />

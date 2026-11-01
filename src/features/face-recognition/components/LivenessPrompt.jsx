@@ -5,11 +5,13 @@ export function LivenessPrompt({
   actionLabel = 'Capture & enroll',
   compact = false,
 }) {
+  const total = liveness.steps?.length || 1;
+  const disabled = liveness.reason === 'disabled_in_settings';
   const message =
     status === 'ready_to_enroll'
       ? compact
-        ? `Ready — tap ${actionLabel}`
-        : `Challenge complete. Keep looking straight ahead, then click ${actionLabel}.`
+        ? `${disabled ? 'Liveness disabled · ' : ''}${liveness.prompt ?? 'Ready'} — tap ${actionLabel}`
+        : `${disabled ? 'Not checked — disabled in Settings.' : 'Challenge complete.'} ${liveness.prompt ?? ''} Then click ${actionLabel}.`
       : status === 'capturing_enrollment'
         ? compact
           ? 'Hold still — saving…'
@@ -18,8 +20,8 @@ export function LivenessPrompt({
           ? 'Saving your result…'
           : status === 'preparing_enrollment'
             ? compact
-              ? 'Hold still — preparing capture…'
-              : 'Challenge complete. Keep looking straight ahead while your enrollment capture is prepared.'
+              ? `${liveness.prompt ?? 'Hold still'} — preparing capture…`
+              : `${disabled ? 'Not checked — disabled in Settings.' : 'Challenge complete.'} ${liveness.prompt ?? 'Hold still'} while the capture is prepared.`
             : status === 'comparing'
               ? compact
                 ? 'Comparing enrolled face…'
@@ -35,11 +37,11 @@ export function LivenessPrompt({
                   : status === 'identity_blocked'
                     ? 'Look straight ahead so the same face can be confirmed'
                     : status === 'quality_blocked'
-                      ? 'Face the camera in even lighting'
+                      ? (liveness.prompt ?? 'Face the camera in even lighting')
                       : liveness.prompt;
   const text =
     liveness.status === 'checking' && status !== 'multiple_faces'
-      ? `Step ${liveness.step + 1}/4 · ${message}`
+      ? `Step ${liveness.step + 1}/${total} · ${message}`
       : message;
   if (compact)
     return (
@@ -53,7 +55,7 @@ export function LivenessPrompt({
         </Typography>
         <LinearProgress
           variant="determinate"
-          value={Math.min(100, (liveness.step / 4) * 100)}
+          value={Math.min(100, (liveness.step / total) * 100)}
           aria-label="Motion challenge progress"
           sx={{
             height: 3,
@@ -82,11 +84,11 @@ export function LivenessPrompt({
       </Alert>
       <LinearProgress
         variant="determinate"
-        value={Math.min(100, (liveness.step / 4) * 100)}
+        value={Math.min(100, (liveness.step / total) * 100)}
         aria-label="Motion challenge progress"
       />
       <Typography variant="caption" color="text.secondary">
-        Randomized head turns · Basic motion check only. Photo/video spoof resistance is not
+        Configurable challenges · Basic liveness only. Photo/video spoof resistance is not
         validated.
       </Typography>
     </Stack>

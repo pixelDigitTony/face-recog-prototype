@@ -1,3 +1,4 @@
+import { GuidedSampleReview } from './GuidedSampleReview';
 import { EnrollmentSamples } from './EnrollmentSamples';
 import { useEffect, useState } from 'react';
 import {
@@ -8,6 +9,8 @@ import {
   Card,
   CardContent,
   Chip,
+  ToggleButton,
+  ToggleButtonGroup,
   CircularProgress,
   Divider,
   Stack,
@@ -33,26 +36,31 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
     [diagnostic, setDiagnostic] = useState(false),
     [error, setError] = useState(null),
     [replaceTemplateId, setReplaceTemplateId] = useState(null),
-    [sampleLabel, setSampleLabel] = useState('');
-  const live = useLiveFaceTracking(personId, purpose, replaceTemplateId, sampleLabel);
+    [sampleLabel, setSampleLabel] = useState(''),
+    [guided, setGuided] = useState(false);
+  const live = useLiveFaceTracking(personId, purpose, replaceTemplateId, sampleLabel, guided);
   const enrollment = purpose === 'enroll',
     people =
       db.database?.people.filter(
         (p) =>
           enrollment ||
           db.database.templates.some(
-            (t) => t.id === p.primaryTemplateId && t.enrollmentSource !== 'test_image',
+            (t) => t.personId === p.id && t.enrollmentSource !== 'test_image',
           ),
       ) ?? [];
   const person = people.find((p) => p.id === personId) ?? null;
   const samples = db.database?.templates.filter((t) => t.personId === personId) ?? [];
-  const actionLabel = replaceTemplateId
-    ? 'Replace this sample'
-    : samples.length
-      ? 'Add face sample'
-      : 'Capture & enroll';
-  const atCapacity = enrollment && samples.length >= 5 && !replaceTemplateId;
+  const actionLabel = guided
+    ? 'Capture sample'
+    : replaceTemplateId
+      ? 'Replace this sample'
+      : samples.length
+        ? 'Add face sample'
+        : 'Capture & enroll';
+  const atCapacity = enrollment && !replaceTemplateId && samples.length + (guided ? 3 : 1) > 5;
+  const pendingReview = Boolean(live.review);
   const active = live.camera.active || live.starting;
+  const blocked = active || pendingReview;
   useEffect(() => {
     if (
       replaceTemplateId &&
@@ -91,7 +99,8 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
         {enrollment ? 'Enroll with a live camera.' : 'A live view. A deliberate match.'}
       </Typography>
       <Typography color="text.secondary" sx={{ mb: 3 }}>
-        Every detected face gets a box. Complete the motion challenge with one person in view.
+        Every detected face gets a box. Follow the configured enrollment checks with one person in
+        view.
       </Typography>
       {enrollment && (
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -114,11 +123,12 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
                 fullWidth
                 options={people}
                 value={person}
-                disabled={active || Boolean(live.result && !live.result.persisted)}
+                disabled={blocked || Boolean(live.result && !live.result.persisted)}
                 getOptionLabel={(p) => `${p.employeeCode} · ${p.displayName}`}
                 isOptionEqualToValue={(a, b) => a.id === b.id}
                 onChange={(_, p) => {
                   setPersonId(p?.id ?? '');
+                  setGuided(false);
                   setReplaceTemplateId(null);
                   setSampleLabel('');
                 }}
@@ -146,31 +156,70 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
                   person={person}
                   samples={samples}
                   disabled={
-                    active ||
+                    blocked ||
                     db.mode !== 'writable' ||
                     Boolean(live.result && !live.result.persisted)
                   }
                   replaceTemplateId={replaceTemplateId}
-                  onReplace={setReplaceTemplateId}
+                  onReplace={(id) => {
+                    setGuided(false);
+                    setReplaceTemplateId(id);
+                  }}
                 />
                 <TextField
                   fullWidth
                   label="New sample label (optional)"
                   value={sampleLabel}
                   onChange={(e) => setSampleLabel(e.target.value)}
-                  disabled={active}
+                  disabled={blocked || guided}
                   slotProps={{ htmlInput: { maxLength: 60 } }}
                   sx={{ mb: 2 }}
                 />
               </>
             )}
-            {person &&
-              db.database.templates.find((t) => t.id === person.primaryTemplateId)
-                ?.enrollmentSource === 'legacy_unknown' && (
-                <Alert severity="info" sx={{ mb: 2 }}>
-                  Enrollment liveness not checked. Re-enroll to record a camera challenge.
-                </Alert>
-              )}
+            {enrollment && person && !replaceTemplateId && (
+              <Stack spacing={1} sx={{ mb: 2 }}>
+                <ToggleButtonGroup
+                  exclusive
+                  value={guided ? 'guided' : 'single'}
+                  disabled={blocked}
+                  onChange={(_, v) => {
+                    if (v) setGuided(v === 'guided');
+                  }}
+                  aria-label="Enrollment capture mode"
+                >
+                  <ToggleButton value="single">Add one sample</ToggleButton>
+                  <ToggleButton value="guided" disabled={blocked || samples.length > 2}>
+                    Guided set — three samples
+                  </ToggleButton>
+                </ToggleButtonGroup>
+                {samples.length > 2 && (
+                  <Typography variant="caption">
+                    Guided capture needs three free slots. Add one sample, or explicitly
+                    delete/replace an existing sample.
+                  </Typography>
+                )}
+                {guided && (
+                  <Typography variant="body2">
+                    Capture front, slight left and slight right, then review and save together.
+                    Different-day makeup or glasses samples can complement these angles.
+                  </Typography>
+                )}
+              </Stack>
+            )}
+            {pendingReview && (
+              <GuidedSampleReview
+                samples={live.review}
+                busy={live.status === 'saving_set'}
+                onSave={live.saveSet}
+                onDiscard={live.discardSet}
+              />
+            )}
+            {live.status === 'completed' && guided && !pendingReview && (
+              <Alert severity="info" sx={{ my: 2 }}>
+                Guided capture finished. Saved samples appear above; discarded sets are not stored.
+              </Alert>
+            )}
             <Box
               data-testid="live-camera"
               sx={{
@@ -244,7 +293,7 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
                 variant="contained"
                 onClick={live.start}
                 disabled={
-                  active ||
+                  blocked ||
                   atCapacity ||
                   db.mode !== 'writable' ||
                   Boolean(live.result && !live.result.persisted)
@@ -272,7 +321,7 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
                 fullWidth
                 variant="contained"
                 sx={{ mt: 2 }}
-                disabled={live.status !== 'ready_to_enroll' || atCapacity}
+                disabled={live.status !== 'ready_to_enroll' || atCapacity || pendingReview}
                 onClick={enroll}
               >
                 {live.status === 'capturing_enrollment' || live.status === 'saving'
@@ -288,7 +337,7 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
             <Divider sx={{ my: 2 }} />
             <Button
               size="small"
-              disabled={active || Boolean(live.result && !live.result.persisted)}
+              disabled={blocked || Boolean(live.result && !live.result.persisted)}
               onClick={() => {
                 live.stop();
                 setDiagnostic(true);
@@ -315,7 +364,8 @@ export function LiveScanWorkspace({ purpose = 'verify' }) {
                 </Typography>
               )}
               <Typography variant="caption" display="block" sx={{ mt: 1 }}>
-                Similarity score, not identity probability. Liveness must also pass.
+                Similarity score, not identity probability. Enabled enrollment tests must pass;
+                disabled tests are recorded as not checked.
               </Typography>
               <Divider sx={{ my: 2 }} />
               <DetectedFacesList

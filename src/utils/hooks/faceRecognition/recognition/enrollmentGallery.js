@@ -24,7 +24,6 @@ export async function buildEnrollmentGallery(database, manifest, context) {
       }
       entries.push({
         personId: person.id,
-        primary: template.id === person.primaryTemplateId,
         personSnapshot: { displayName: person.displayName, employeeCode: person.employeeCode },
         templateId: template.id,
         templateVersion: template.version,

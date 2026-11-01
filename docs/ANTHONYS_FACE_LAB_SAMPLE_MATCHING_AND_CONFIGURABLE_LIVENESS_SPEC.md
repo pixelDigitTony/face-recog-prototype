@@ -1,6 +1,7 @@
 # Anthony's Face Lab: Equal Samples, Configurable Liveness and Guided Enrollment
 
-Status: **Specification only — not implemented.**  
+Status: **Implemented locally; see IMPLEMENTATION.md for checks and outstanding physical-camera acceptance.**
+
 Date: 2026-10-30 (Asia/Manila).  
 Project: `C:\Users\USER\projects\Starwinner\face-recog-prototype`.
 
@@ -8,7 +9,7 @@ Project: `C:\Users\USER\projects\Starwinner\face-recog-prototype`.
 
 Remove primary-sample selection, consistently use every eligible sample when identifying an enrollee, add configurable enrollment liveness with optional blinking, and offer guided capture of three reference samples.
 
-This specification records the approved plan and the user's explicit choices. Creating this document does not authorize application implementation or deployment. When subsequently implemented, it supersedes primary-sample, paired-evaluation and fixed-challenge requirements in `ANTHONYS_FACE_LAB_MULTI_SAMPLE_EVALUATION_SPEC.md` and earlier specifications only where revised here. Historical decisions keep their original meaning.
+This specification records the approved plan and the user's explicit choices. Application implementation was subsequently authorized in this conversation; deployment remains outside this local implementation. When subsequently implemented, it supersedes primary-sample, paired-evaluation and fixed-challenge requirements in `ANTHONYS_FACE_LAB_MULTI_SAMPLE_EVALUATION_SPEC.md` and earlier specifications only where revised here. Historical decisions keep their original meaning.
 
 The application remains **Anthony's Face Lab**, using React JavaScript, MUI, browser-side recognition and localStorage. No backend, paid service, model replacement, automatic learning, attendance authorization or deployment is included.
 
@@ -237,7 +238,7 @@ Update the existing UML source to show:
 - Guided capture -> sealed review -> atomic three-sample save, with cancel, continuity loss and persistence failures.
 - Schema migration and legacy-policy validation paths.
 
-This specification-only task does not modify those implementation documents, UML or application files.
+The authorized implementation updates these documents and the UML alongside the application changes.
 
 ## 8. Acceptance criteria and verification
 
@@ -274,4 +275,4 @@ Run relevant unit tests, desktop/mobile browser checks, formatting, production b
 
 Separately exercise physical cameras across normal/dim/uneven lighting, glasses, makeup, natural blinks and slower devices. Measure actual liveness cadence and genuine/different-person scores; do not infer accuracy or spoof resistance from mocked tests. Printed-photo and replay-video trials document prototype limitations rather than establish certification.
 
-Record implementation checks and remaining physical-camera acceptance separately. Until implementation is authorized and verified, this document remains a specification only.
+Record implementation checks and remaining physical-camera acceptance separately. Physical-camera acceptance and deployment remain separate from the local automated checks.

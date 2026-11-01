@@ -1,3 +1,4 @@
+import { ENROLLMENT_POLICY, MULTI_ENROLLMENT_POLICY } from '../liveness/livenessPolicy';
 import { cosineSimilarity } from '../recognition/cosineSimilarity';
 import { percentage, LIVE_POLICY, SCORE_MAPPING } from '../recognition/matchPolicy';
 
@@ -34,20 +35,22 @@ export function createFaceWorkflow({ repository, engine, context }) {
       };
     }
   }
-  async function run(purpose, { personId, capture, signal, prepared }) {
+  async function run(purpose, { personId, capture, signal, prepared, prepareOnly = false }) {
     if (busy) throw new Error('A capture is already processing.');
     busy = true;
     try {
       await repository.load();
       const db = repository.getSnapshot().database;
-      const person = structuredClone(db?.people.find((p) => p.id === personId));
+      const person = structuredClone(
+        db?.people.find((p) => p.id === personId) ?? prepared?.newPerson,
+      );
       if (!person?.acknowledgedAt)
         throw new Error('Select a person and acknowledge browser storage first.');
       if (purpose === 'verify') await engine.initialize?.();
       const eligible = db.templates.filter(
         (t) => t.personId === personId && compatibleTemplate(t, engine.manifest),
       );
-      const template = structuredClone(db.templates.find((t) => t.id === person.primaryTemplateId));
+      const templates = db.templates.filter((t) => t.personId === personId);
       const settings = { ...db.settings },
         startedAt = new Date().toISOString();
       let extracted = {},
@@ -57,9 +60,9 @@ export function createFaceWorkflow({ repository, engine, context }) {
         extracted = prepared.extracted || {};
         capturedAt = new Date().toISOString();
         outcome = prepared.outcome;
-        if (person.primaryTemplateId !== prepared.expectedTemplateId)
+        if (person.enrollmentRevision !== prepared.expectedEnrollmentRevision)
           throw new Error('Enrollment changed. Start again.');
-      } else if (purpose === 'verify' && !template) outcome = 'NOT_ENROLLED';
+      } else if (purpose === 'verify' && !templates.length) outcome = 'NOT_ENROLLED';
       else if (purpose === 'verify' && !eligible.length) outcome = 'MODEL_MISMATCH';
       else {
         let frame;
@@ -113,11 +116,9 @@ export function createFaceWorkflow({ repository, engine, context }) {
         companyId: context.companyId,
         storeId: context.storeId ?? null,
         personSnapshot: { employeeCode: person.employeeCode, displayName: person.displayName },
-        templateId: extracted.winningTemplateId ?? template?.id ?? null,
+        templateId: extracted.winningTemplateId ?? null,
         templateVersion:
-          eligible.find((t) => t.id === extracted.winningTemplateId)?.version ??
-          template?.version ??
-          null,
+          eligible.find((t) => t.id === extracted.winningTemplateId)?.version ?? null,
         startedAt,
         capturedAt,
         completedAt: new Date().toISOString(),
@@ -137,7 +138,12 @@ export function createFaceWorkflow({ repository, engine, context }) {
         source: prepared ? 'live_camera' : 'test_image',
         authoritative: false,
         scoreMappingVersion: SCORE_MAPPING,
-        decisionPolicyVersion: LIVE_POLICY,
+        decisionPolicyVersion:
+          prepared && purpose === 'enroll'
+            ? prepared.enrollmentPolicyVersion === MULTI_ENROLLMENT_POLICY
+              ? MULTI_ENROLLMENT_POLICY
+              : ENROLLMENT_POLICY
+            : LIVE_POLICY,
         matchPercentage: percentage(similarity),
         percentageThresholdSnapshot: 85,
         comparisonOperator: '>',
@@ -146,8 +152,10 @@ export function createFaceWorkflow({ repository, engine, context }) {
       };
       const operation = {
         type: 'saveAttempt',
+        ...(prepared?.newPerson
+          ? { newPerson: prepared.newPerson, manifest: engine.manifest }
+          : {}),
         attempt,
-        expectedTemplateId: person.primaryTemplateId,
         expectedEnrollmentRevision:
           prepared?.expectedEnrollmentRevision ?? person.enrollmentRevision,
         replaceTemplateId: prepared?.replaceTemplateId ?? null,
@@ -169,6 +177,7 @@ export function createFaceWorkflow({ repository, engine, context }) {
           createdAt: attempt.completedAt,
           enrollmentSource: prepared ? 'live_camera' : 'test_image',
           enrollmentLiveness: prepared?.liveness?.status ?? 'not_checked',
+          liveness: prepared?.liveness ?? null,
         };
         attempt.templateId = newTemplate.id;
         attempt.templateVersion = newTemplate.version;
@@ -176,12 +185,13 @@ export function createFaceWorkflow({ repository, engine, context }) {
         operation.template = newTemplate;
       }
       operation.signal = signal;
-      return await save(operation);
+      return prepareOnly ? operation : await save(operation);
     } finally {
       busy = false;
     }
   }
   return {
+    prepareEnrollment: (request) => run('enroll', { ...request, prepareOnly: true }),
     enroll: (request) => run('enroll', request),
     verify: (request) => run('verify', request),
     savePrepared: (purpose, request) => run(purpose, request),

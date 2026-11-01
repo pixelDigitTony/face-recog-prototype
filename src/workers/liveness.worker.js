@@ -26,11 +26,12 @@ self.onmessage = async ({ data: { id, type, payload } }) => {
       landmarker = await Vision.FaceLandmarker.createFromOptions(files, {
         baseOptions: { modelAssetBuffer, delegate: 'CPU' },
         runningMode: 'VIDEO',
-        numFaces: 1,
+        numFaces: payload.numFaces ?? 1,
         minFaceDetectionConfidence: 0.7,
         minFacePresenceConfidence: 0.7,
         minTrackingConfidence: 0.7,
         outputFacialTransformationMatrixes: true,
+        outputFaceBlendshapes: Boolean(payload.blink),
       });
       result = manifest;
     } else {
@@ -40,22 +41,41 @@ self.onmessage = async ({ data: { id, type, payload } }) => {
         new ImageData(frame.data, frame.width, frame.height),
         timestamp,
       );
-      const points = output.faceLandmarks[0],
-        matrix = output.facialTransformationMatrixes[0]?.data;
-      result = { yaw: null, box: null };
-      if (points && matrix) {
+      const faces = output.faceLandmarks.flatMap((points, index) => {
+        const matrix = output.facialTransformationMatrixes[index]?.data;
+        if (!points || !matrix) return [];
         const xs = points.map((p) => p.x * frame.width),
           ys = points.map((p) => p.y * frame.height);
-        result = {
-          yaw: (Math.atan2(-matrix[2], Math.hypot(matrix[0], matrix[1])) * 180) / Math.PI,
-          box: [
-            Math.min(...xs),
-            Math.min(...ys),
-            Math.max(...xs) - Math.min(...xs),
-            Math.max(...ys) - Math.min(...ys),
-          ],
-        };
-      }
+        return [
+          {
+            timestamp,
+            eyeBlinkLeft:
+              output.faceBlendshapes?.[index]?.categories.find(
+                (c) => c.categoryName === 'eyeBlinkLeft',
+              )?.score ?? null,
+            eyeBlinkRight:
+              output.faceBlendshapes?.[index]?.categories.find(
+                (c) => c.categoryName === 'eyeBlinkRight',
+              )?.score ?? null,
+            yaw: (Math.atan2(-matrix[2], Math.hypot(matrix[0], matrix[1])) * 180) / Math.PI,
+            box: [
+              Math.min(...xs),
+              Math.min(...ys),
+              Math.max(...xs) - Math.min(...xs),
+              Math.max(...ys) - Math.min(...ys),
+            ],
+          },
+        ];
+      });
+      result = {
+        yaw: null,
+        box: null,
+        timestamp,
+        eyeBlinkLeft: null,
+        eyeBlinkRight: null,
+        ...faces[0],
+        faces,
+      };
     }
     self.postMessage({ id, ok: true, result });
   } catch (error) {

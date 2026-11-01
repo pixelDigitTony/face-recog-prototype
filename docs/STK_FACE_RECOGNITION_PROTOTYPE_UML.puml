@@ -1,6 +1,6 @@
 ' Implemented frontend prototype; acceptance evidence: IMPLEMENTATION.md.
 ' Companion: STK_FACE_RECOGNITION_PROTOTYPE_SPEC.md
-' Nine named diagrams: capture/enrollment baseline plus automatic identification.
+' Fourteen named diagrams: capture, tracking, enrollment and comparative evaluation.
 
 @startuml stk_face_prototype_components
 title Anthony's Face Lab - frontend component boundaries
@@ -49,7 +49,7 @@ Scheduler --> Identify : automatic scan; no selected person
 Identify --> Engine : gallery + detect / extract selected faces
 Identify --> RepositoryPort : immutable identification event
 Live --> Engine : all boxes / optional embedding
-Live --> Liveness : single face pose evidence
+Live --> Liveness : per-face pose evidence
 Live --> Workflow : one prepared terminal attempt
 Workflow --> RepositoryPort : scoped operations
 RepositoryPort <|.. Repository
@@ -91,7 +91,7 @@ skinparam classAttributeIconSize 0
 skinparam shadowing false
 
 class PrototypeDatabase {
-  schemaVersion : integer = 4
+  schemaVersion : integer = 5
   databaseId : UUID
   revision : integer
   createdAt : UTC timestamp
@@ -108,8 +108,7 @@ class Person {
   displayName : string
   department : string or null
   acknowledgedAt : UTC timestamp or null
-  primaryTemplateId : UUID or null
-  enrollmentRevision : monotonic integer
+  enrollmentRevision : monotonic integer (sample-set CAS)
   createdAt / updatedAt : UTC timestamps
 }
 
@@ -120,8 +119,8 @@ class EvaluationTrial {
   observations : 3 fresh embeddings or empty on failure
   modelIdentity / preprocessingVersion : snapshot
   galleryVersion : SHA256
-  policy : evaluation-multisample-v1
-  report : primary/all summary at 85 percent
+  policy : evaluation-all-samples-v2; legacy v1 retained
+  report : all-sample summary at 85 percent; legacy paired policy retained
 }
 PrototypeDatabase "1" *-- "0..100" EvaluationTrial
 Person "0..1" -- "0..*" EvaluationTrial : manually labeled trials
@@ -175,7 +174,7 @@ class CaptureAttempt {
   thumbnailDataUrl : string or null
   matchPercentage : number or null
   comparisonOperator : > for new live policy
-  decisionPolicyVersion : live-85-strict-v1 or legacy
+  decisionPolicyVersion : enrollment-configurable-liveness-v1 or historical
   source : live_camera | test_image | legacy_unknown
   livenessStatus : passed_basic | failed | expired | not_checked
   liveness : bounded challenge summary
@@ -191,7 +190,8 @@ class ModelIdentity {
 }
 
 class Settings {
-  matchThreshold : number = 0.363
+  matchThreshold : number = 0.85
+  enrollmentLiveness : version + turnLeft + turnRight + blink
   saveThumbnails : boolean = true
   maxPeople : integer = 50
   maxAttempts : integer = 200
@@ -375,7 +375,7 @@ end note
 @enduml
 
 @startuml stk_live_face_sequence
-title Live 1:1 verification with multi-face overlays and basic liveness
+title Compatibility 1:1 verification - automatic Scan uses separate identification flow
 skinparam shadowing false
 actor Tester
 participant "React / MUI" as UI
@@ -383,9 +383,9 @@ participant "Live workflow" as Live
 participant "YuNet / SFace worker" as Recognition
 participant "MediaPipe worker" as Pose
 participant "ActiveChallenge" as Challenge
-database "localStorage v2" as DB
+database "localStorage schema 5" as DB
 Tester -> UI : select person; Start live scan
-UI -> Live : freeze person / template / session
+UI -> Live : freeze person / eligible samples / session
 loop one sampled pipeline at a time
   UI -> Live : fresh frame + monotonic timestamp
   Live -> Recognition : detect all faces; optional embedding
@@ -401,7 +401,7 @@ loop one sampled pipeline at a time
     Pose --> Live : yaw + cross-check box
     Live -> Challenge : fresh timestamp + pose
     Challenge --> Live : random prompts / basic pass / failure
-    Live -> Live : compare directly with selected saved template
+    Live -> Live : compare selected person using best eligible sample
     Live --> UI : prompt and similarity, when available
     opt basic pass valid and three raw scores > 0.85 over >=600ms
       Live -> DB : atomic terminal attempt, fixed policy, evidence
@@ -418,7 +418,7 @@ end note
 @enduml
 
 @startuml stk_live_face_states
-title Live face session states
+title Enrollment states - configurable challenges and sealed guided review
 skinparam shadowing false
 [*] --> Idle
 Idle --> Loading : explicit Start
@@ -428,8 +428,9 @@ Tracking --> Challenging : one selected eligible face; neutral baseline
 Tracking --> Blocked : multiple / missing / quality / ambiguity
 Challenging --> Blocked : continuity lost; revoke challenge
 Blocked --> Challenging : same track resumes steps; new track starts fresh
-Challenging --> Comparing : verification; both turns and returns completed
-Challenging --> PreparingEnrollment : enrollment; challenge completed
+Challenging --> Comparing : compatibility verification; required challenges completed
+Challenging --> PreparingEnrollment : enabled enrollment challenges completed
+Tracking --> PreparingEnrollment : all challenges disabled; quality gates remain
 Challenging --> Challenging : incorrect action / delay; retain completed steps
 Comparing --> Saving : stable match / no match with fresh observations
 Comparing --> Blocked : multiple faces / tracking lost
@@ -438,7 +439,12 @@ PreparingEnrollment --> Blocked : missing / multiple face; quality / continuity 
 EnrollmentReady --> CapturingEnrollment : explicit capture; latch action
 EnrollmentReady --> EnrollmentReady : detection only; skip pose and identity checks
 EnrollmentReady --> Blocked : missing / multiple / ambiguous face; continuity lost
-CapturingEnrollment --> Saving : post-click fresh frame; valid pose / quality / candidate
+CapturingEnrollment --> Saving : single capture; fresh pose / quality / candidate
+CapturingEnrollment --> PreparingEnrollment : guided set; next same-face pose
+CapturingEnrollment --> Review : third guided capture; seal evidence and stop camera
+Review --> Saving : explicit atomic Save three samples
+Review --> Completed : discard set
+Saving --> Review : guided persistence failure; retain evidence
 CapturingEnrollment --> EnrollmentReady : rejected capture; retain completed steps; show retry message
 CapturingEnrollment --> Blocked : tracking / context invalidated
 Saving --> Completed : atomic commit success
@@ -534,10 +540,10 @@ participant "Scan UI / camera" as UI
 participant "Identification coordinator" as Scan
 participant "YuNet / SFace worker" as Worker
 participant "Per-track windows" as Tracks
-database "localStorage schema 4" as DB
+database "localStorage schema 5" as DB
 Tester -> UI : Start scanning; no selected identity
 UI -> Scan : start current scope
-Scan -> DB : load and atomically migrate v1/v2/v3
+Scan -> DB : load and atomically migrate v1/v2/v3/v4
 Scan -> Worker : initialize recognition; setGallery(content hash)
 loop one pipeline at a time until Stop / hide / error
   UI -> Scan : unmirrored frame + capture time
@@ -588,14 +594,14 @@ end note
  participant "Evaluation workflow" as Eval
  participant "YuNet / SFace worker" as Engine
  participant "Person ranking / stability replay" as Policy
- database "localStorage schema 4" as DB
+ database "localStorage schema 5" as DB
  Tester -> UI : label actual enrollee or Not enrolled participant
  UI -> Eval : Start fresh trial
- Eval -> DB : load compatible gallery and primary selection
+ Eval -> DB : load all eligible samples
  Eval -> Engine : analyze 3 fresh frames; single tracked face
  Engine --> Eval : embeddings, quality, timestamps
  alt complete trial with continuity
-   Eval -> Policy : primary-only and all-sample ranking
+   Eval -> Policy : all-sample person ranking
    Policy -> Policy : max sample score per person; distinct-person margin
    Policy --> Eval : summary outcomes at 85 percent
  else invalid / cancelled capture
@@ -606,15 +612,218 @@ end note
  UI -> Policy : derive experimental 20..95 percent table from saved probes
  note over UI, Policy
    Experimental thresholds cannot modify Scan's 85 percent boundary.
-   Reports become outdated when gallery/primary selections change.
+   Reports become outdated when gallery contents or evaluation policy change.
    Explicit rerun uses compatible held-out probes against current gallery.
  end note
  Tester -> UI : Rerun against current gallery
- UI -> Eval : recompute paired results explicitly
+ UI -> Eval : recompute all-sample results explicitly
  Eval -> DB : update report snapshots; keep manual truth and original captures
  note over DB
-   v1/v2/v3 migrate atomically to v4 under existing writer lock/key.
-   Original active template becomes the primary sample.
+   v1/v2/v3/v4 migrate atomically to v5 under existing writer lock/key.
+   Remove active/primary pointers; preserve all samples and revisions.
    Preserve IDs, vectors and old policy evidence; no automatic eviction.
+ end note
+@enduml
+
+@startuml anthonys_configurable_enrollment
+ title Anthony's Face Lab - configurable liveness and guided capture
+ skinparam shadowing false
+ actor Operator
+ participant "Enroll UI / camera" as UI
+ participant "Enrollment coordinator" as Flow
+ participant "Challenge state machine" as Challenge
+ participant "MediaPipe worker" as Pose
+ participant "YuNet / SFace worker" as Engine
+ database "localStorage schema 5" as DB
+ Operator -> UI : select person and single / guided mode
+ UI -> Flow : start; expected enrollment revision
+ Flow -> DB : snapshot settings and sample capacity
+ Flow -> Challenge : immutable turnLeft / turnRight / blink configuration
+ alt all tests disabled
+   Challenge --> Flow : not_checked; disabled_in_settings
+ else enabled tests
+   loop observation worker; one request in flight; blink target 20 Hz
+     UI -> Pose : unmirrored frame and capture timestamp
+     Pose --> Flow : face box, yaw, optional eye-blink scores
+     Flow -> Challenge : fresh observation associated with current track
+     Challenge --> UI : attached prompt; retain completed steps
+   end
+   Challenge --> Flow : passed_basic; session-bound evidence
+ end
+ loop one capture or front / slight left / slight right
+   UI -> Engine : fresh quality-valid capture
+   Engine --> Flow : embedding, quality, model identity
+   Flow -> Flow : held pose and same-pose candidate consistency >0.85
+   Flow --> UI : retain in memory; next pose prompt
+ end
+ alt guided set
+   Flow --> UI : sealed review; stop camera processing; clear overlays
+   Operator -> UI : edit labels; Save three samples
+   UI -> Flow : saveSet(labels)
+   Flow -> DB : addSampleSet(3 templates + 3 attempts, revision, set ID)
+   alt valid capacity, revision, evidence and storage
+     DB --> UI : atomic saved set; no partial history
+   else conflict or failed write
+     DB --> UI : retain review for safe retry / discard
+   end
+ else single capture
+   Flow -> DB : saveEnrollment under configurable policy
+ end
+ note over Flow, Challenge
+   Wrong action retries the current step; same-face passed steps remain.
+   Tracking loss before review invalidates unsaved captures.
+   Sealed review needs no further camera observation.
+   Scan remains automatic and has no enrollment challenge.
+ end note
+@enduml
+
+@startuml anthonys_blink_cycle
+ title Optional blink - observed evidence only
+ [*] --> OpenBaseline
+ OpenBaseline --> Armed : two open observations; both eyes <=0.30
+ Armed --> Closed : both eyes >=0.60 in an observed frame
+ Closed --> Recovery : both eyes open again; elapsed 80..1500ms
+ Recovery --> Passed : second consecutive open observation
+ OpenBaseline --> OpenBaseline : wink / unknown score; no completion
+ Armed --> OpenBaseline : invalid pose / missing data / gap >200ms
+ Closed --> OpenBaseline : held >1500ms / invalid observation
+ Recovery --> Closed : eyes no longer open; reset recovery count
+ Passed --> [*]
+ note right of OpenBaseline
+   Monotonic timestamps; neutral pose.
+   Reset this cycle only; retain other passed challenges.
+   No interpolated blinks or claimed replay resistance.
+ end note
+@enduml
+
+
+@startuml anthonys_curated_comparative_evaluation
+ title Anthony's Face Lab - curated reference comparison
+ skinparam shadowing false
+ actor Operator
+ participant "Evaluate UI" as UI
+ participant "Reference plan" as Plan
+ participant "Evaluation workflow" as Flow
+ participant "YuNet / SFace" as Engine
+ participant "Pure replay" as Replay
+ database "localStorage schema 5" as DB
+ Operator -> UI : select cohort and ordered references
+ UI -> Plan : freeze IDs, versions, content fingerprints and model
+ Plan --> UI : nested 1 / 3 / 5 sets; identical people
+ Operator -> UI : actual identity, conditions, session, independence
+ UI -> Flow : start with frozen plan
+ loop three observations over at least 600ms
+   Flow -> Plan : verify selected references still eligible
+   Flow -> Engine : one fresh capture
+   Engine --> Flow : one probe embedding
+   Flow -> Flow : reject reused enrollment evidence
+ end
+ Flow -> DB : atomic saveEvaluation
+ DB -> Plan : validate plan against current references
+ DB -> Replay : same observations for every subset
+ Replay -> Replay : max sample per person; existing stability and margin
+ Replay --> DB : distinct correct / missed / wrong / unknown outcomes
+ DB --> UI : saved per-mode reports and shared observations
+ UI -> UI : paired changes, per-person rates, conditions filters
+ Operator -> UI : export comparative report
+ UI --> Operator : counts, plan and outcomes; omit probe vectors
+ note over Plan, DB
+   Selected content changes invalidate current comparisons.
+   Historical results keep recorded evidence; no substitution or rerun.
+   Display-only renames and unused additions preserve selected subsets.
+   Evaluation baseline is independent of live Scan.
+ end note
+@enduml
+
+
+@startuml anthonys_face_first_enrollment
+ title Anthony's Face Lab - face first, name confirmation, atomic enrollment
+ skinparam shadowing false
+ actor Operator
+ participant "Enroll / camera" as UI
+ participant "Discovery" as Match
+ participant "Enrollment coordinator" as Flow
+ participant "Configured liveness and capture" as Checks
+ database "localStorage schema 5" as DB
+ Operator -> UI : Start live scan
+ UI -> Match : detections and probe embeddings keyed by detection ID
+ Match -> Match : independent stability and >=0.85 matching for each track
+ Match --> UI : each face has its own candidate, thumbnail, score and status
+ alt confirmed existing enrollee
+   Match --> UI : matched record; hold identity while track continues
+   Operator -> UI : explicitly add / replace a sample
+ else stable unknown tracked face
+   Match --> UI : name field in Current match similarity
+   Operator -> UI : name + Enter; acknowledge browser-local storage
+ end
+ UI -> Flow : nameDetectedFace(track ID, name or matched person ID)
+ Flow -> Match : verify fresh same track and unchanged gallery
+ Flow -> Flow : bind target; keep new person in memory
+ Flow -> Checks : configured challenges and fresh same-pose consistency
+ Checks --> Flow : ready; request capture automatically
+ alt successful single enrollment
+   Flow -> DB : saveEnrollment(newPerson?, template, attempt)
+   DB -> DB : recheck identity, scope, capacity and evidence
+   DB --> UI : one atomic write; resume discovery
+ else optional guided set
+   Flow --> UI : sealed three-sample review
+   Operator -> UI : Save three samples
+   Flow -> DB : addSampleSet(newPerson?, captures)
+ else loss / ambiguity / cancellation
+   Flow --> UI : discard bound draft; require name confirmation again
+ end
+ note over Flow, DB
+   Multiple faces keep independent analysis and per-face capture sessions.
+   At most two crops per comparison; rotate fairly across detections.
+   No empty person row from typing a name.
+   Failed writes preserve existing data and retry the same capture.
+   No selection or diagnostic image mode on Enroll.
+   Diagnostic images remain available in Settings.
+ end note
+@enduml
+
+
+@startuml anthonys_parallel_enrollment
+ title Anthony's Face Lab - independent enrollment capture for multiple faces
+ skinparam shadowing false
+ actor Operator
+ participant "Camera / per-face cards" as UI
+ participant "Multi-enrollment coordinator" as Flow
+ participant "Per-track state map" as Tracks
+ participant "YuNet / SFace worker" as Recognition
+ participant "Shared multi-face MediaPipe worker" as Pose
+ participant "Exclusive pose association" as Associate
+ database "localStorage schema 5" as DB
+ Operator -> UI : name Face 1; Enter\nname Face 2; Enter
+ UI -> Flow : bind each fresh track independently
+ Flow -> Tracks : person drafts, challenges and immutable settings
+ loop bounded frame processing
+   UI -> Recognition : scene frame; at most two recognition crops per comparison
+   Recognition --> Flow : detections and embeddings keyed by detection ID
+   UI -> Pose : scene frame; optional independent blink observations
+   Pose --> Associate : multiple boxes, yaw and eye scores
+   Flow -> Associate : tracked boxes and ambiguity flags
+   Associate --> Tracks : exclusive observations keyed by track ID
+   loop each active enrollment
+     Tracks -> Tracks : update only own steps and capture consistency
+     alt ready single capture
+       Tracks -> DB : atomic person + sample + attempt
+       DB --> UI : per-face saved / retry result
+     else ready guided set
+       Tracks --> UI : sealed per-face review; others continue
+       Operator -> UI : Save this person's three samples
+       UI -> DB : atomic per-person sample set
+     else lost / uncertain association
+       Tracks --> UI : cancel only this draft; preserve other sessions
+     end
+   end
+ end
+ note over Tracks, DB
+   New policy: enrollment-per-face-liveness-v2.
+   Actual scene count and single-target count are separate.
+   Record exclusive IoU, boxes, timestamps and track bindings.
+   Old policies retain strict single-face validation.
+   Inference and writes are scheduled in bounded batches;
+   progress and failures belong to each person independently.
  end note
 @enduml

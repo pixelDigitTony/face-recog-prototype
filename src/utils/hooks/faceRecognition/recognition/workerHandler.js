@@ -6,6 +6,7 @@ import { assessQuality, thumbnail } from './imageQuality';
 import { rankEmbedding } from './identificationPolicy';
 
 let models, retained;
+let enrollmentCursor = 0;
 let gallery = { version: null, entries: [] };
 function releaseFrame() {
   retained?.source.delete();
@@ -84,9 +85,9 @@ export async function handleWorkerRequest({ type, payload }) {
       preprocessingVersion: manifest.preprocessingVersion,
       qualityPolicyVersion: manifest.qualityPolicyVersion,
       quality: { faceCount: faces.length },
-      faces: faces.map((face) => {
+      faces: faces.map((face, detectionId) => {
         const quality = assessQuality(cv, source, face, manifest.qualityPolicy);
-        return { ...face, quality: quality.metrics, reasonCode: quality.reasonCode };
+        return { ...face, detectionId, quality: quality.metrics, reasonCode: quality.reasonCode };
       }),
       timingsMs,
       embedding: null,
@@ -99,7 +100,37 @@ export async function handleWorkerRequest({ type, payload }) {
       timingsMs.total = performance.now() - start;
       return result;
     }
-    if (faces.length === 1) {
+    if (payload.analyzeAllFaces) {
+      result.faceEmbeddings = [];
+      const eligible = result.faces.filter((face) => !face.reasonCode);
+      if (payload.includeEmbedding !== false && eligible.length) {
+        const start = performance.now();
+        const count = Math.min(2, eligible.length);
+        for (let offset = 0; offset < count; offset++) {
+          const face = eligible[(enrollmentCursor + offset) % eligible.length];
+          let aligned, tensor, features;
+          try {
+            aligned = alignFace(cv, source, face.landmarks);
+            tensor = imageTensor(cv, ort, aligned, 112, 112, true);
+            features = await recognizer.run({ [manifest.recognizer.input]: tensor });
+            const embedding = normalizeEmbedding(features[recognizer.outputNames[0]].data);
+            result.faceEmbeddings.push({ detectionId: face.detectionId, embedding });
+            if (faces.length === 1) result.embedding = embedding;
+          } finally {
+            aligned?.delete();
+            tensor?.dispose();
+            Object.values(features || {}).forEach((value) => value.dispose());
+          }
+        }
+        enrollmentCursor = (enrollmentCursor + count) % eligible.length;
+        timingsMs.embedding = performance.now() - start;
+      }
+      if (faces.length === 1) {
+        result.quality = result.faces[0].quality;
+        result.reasonCode = result.faces[0].reasonCode;
+        if (result.reasonCode) result.outcome = 'LOW_QUALITY';
+      }
+    } else if (faces.length === 1) {
       const quality = result.faces[0];
       result.quality = quality.quality;
       if (quality.reasonCode) {

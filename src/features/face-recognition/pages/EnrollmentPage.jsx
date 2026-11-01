@@ -1,4 +1,4 @@
-import { LiveScanWorkspace } from '../components/LiveScanWorkspace';
+import { AutomaticEnrollmentWorkspace } from '../components/AutomaticEnrollmentWorkspace';
 export function EnrollmentPage() {
-  return <LiveScanWorkspace purpose="enroll" />;
+  return <AutomaticEnrollmentWorkspace />;
 }

@@ -39,7 +39,7 @@ export function SettingsPage() {
           Diagnostic image comparison only. Images cannot produce live identification or pass
           liveness.
         </Alert>
-        <CaptureWorkspace purpose="verify" />
+        <CaptureWorkspace purpose={diagnostic === 'enroll' ? 'enroll' : 'verify'} />
       </>
     );
   return (
@@ -61,7 +61,7 @@ export function SettingsPage() {
             </Typography>
             {settings && (
               <form
-                key={`${settings.matchThreshold}-${settings.saveThumbnails}`}
+                key={JSON.stringify(settings)}
                 onSubmit={async (event) => {
                   event.preventDefault();
                   const data = new FormData(event.currentTarget);
@@ -73,6 +73,12 @@ export function SettingsPage() {
                       settings: {
                         matchThreshold: 0.85,
                         saveThumbnails: data.has('thumbnails'),
+                        enrollmentLiveness: {
+                          version: 1,
+                          turnLeft: data.has('turnLeft'),
+                          turnRight: data.has('turnRight'),
+                          blink: data.has('blink'),
+                        },
                       },
                     });
                     setSuccess(true);
@@ -100,6 +106,29 @@ export function SettingsPage() {
                     Full video and full-resolution frames are not retained. Embeddings are saved
                     with enrollment and diagnostic captures. Automatic identification stores score
                     summaries only.
+                  </Typography>
+                  <Typography variant="h6">Enrollment liveness</Typography>
+                  <Typography variant="body2">
+                    Applies to the next enrollment session. Scan stays automatic. These are basic
+                    challenges; replay resistance is not validated.
+                  </Typography>
+                  {Object.entries({
+                    turnLeft: 'Turn left',
+                    turnRight: 'Turn right',
+                    blink: 'Blink',
+                  }).map(([key, label]) => (
+                    <FormControlLabel
+                      key={key}
+                      label={label}
+                      control={
+                        <Switch name={key} defaultChecked={settings.enrollmentLiveness[key]} />
+                      }
+                    />
+                  ))}
+                  <Typography variant="caption">
+                    When all tests are off: Not checked — disabled in Settings. Face quality and
+                    capture checks still apply. Blink detection needs a clear, responsive camera
+                    feed.
                   </Typography>
                   {error && <Alert severity="error">{error}</Alert>}
                   {success && <Alert severity="success">Settings saved.</Alert>}
@@ -167,6 +196,9 @@ export function SettingsPage() {
       <RecordDetailsDialog record={details} onClose={() => setDetails(null)} />
       <Button sx={{ mt: 3 }} onClick={() => setDiagnostic(true)}>
         Diagnostic image comparison
+      </Button>
+      <Button sx={{ mt: 3 }} onClick={() => setDiagnostic('enroll')}>
+        Diagnostic image enrollment
       </Button>
     </>
   );

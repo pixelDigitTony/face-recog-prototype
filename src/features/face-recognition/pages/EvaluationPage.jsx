@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
   Alert,
   Box,
@@ -21,16 +21,40 @@ import { useEvaluation } from '@/utils/hooks/faceRecognition/useEvaluation';
 import { buildEnrollmentGallery } from '@/utils/hooks/faceRecognition/recognition/enrollmentGallery';
 import {
   EVALUATION_THRESHOLDS,
+  EVALUATION_POLICY,
   evaluationSummary,
   evaluateTrial,
 } from '@/utils/hooks/faceRecognition/recognition/evaluation';
 import { downloadJson } from '@/utils/hooks/faceRecognition/downloadJson';
 import { FaceOverlay } from '../components/FaceOverlay';
+import { ComparativeEvaluationWorkspace } from '../components/ComparativeEvaluationWorkspace';
 
 const rate = (n, total) =>
   total ? `${n}/${total} (${((100 * n) / total).toFixed(1)}%)` : 'Unavailable (0 trials)';
 const score = (v) => (v == null ? '—' : `${(v * 100).toFixed(2)}%`);
 export function EvaluationPage() {
+  const [view, setView] = useState('all');
+  const { evaluationWorkflow: flow } = useFaceServices();
+  const liveState = useSyncExternalStore(flow.subscribe, flow.getSnapshot, flow.getSnapshot);
+  return (
+    <Stack spacing={3}>
+      <TextField
+        select
+        label="Evaluation mode"
+        value={view}
+        disabled={
+          ['loading', 'capturing', 'saving'].includes(liveState.status) || !!liveState.pending
+        }
+        onChange={(e) => setView(e.target.value)}
+      >
+        <MenuItem value="all">All eligible samples</MenuItem>
+        <MenuItem value="compare">Compare 1 / 3 / 5 samples</MenuItem>
+      </TextField>
+      {view === 'all' ? <AllSamplesEvaluation /> : <ComparativeEvaluationWorkspace />}
+    </Stack>
+  );
+}
+function AllSamplesEvaluation() {
   const { repository, engine, context } = useFaceServices(),
     state = useLocalDatabase(),
     live = useEvaluation();
@@ -38,13 +62,15 @@ export function EvaluationPage() {
     [participantLabel, setParticipantLabel] = useState(''),
     [notes, setNotes] = useState(''),
     [filter, setFilter] = useState(''),
-    [mode, setMode] = useState('all'),
     [galleryVersion, setGalleryVersion] = useState(null),
     [currentGallery, setCurrentGallery] = useState(null),
     [error, setError] = useState(null),
     [loading, setLoading] = useState(false);
+  const mode = 'all';
   const db = state.database,
-    trials = db?.evaluationTrials ?? [];
+    trials = (db?.evaluationTrials ?? []).filter(
+      (t) => t.policy !== 'evaluation-curated-counts-v3',
+    );
   const active = ['loading', 'capturing', 'saving'].includes(live.status);
   useEffect(() => {
     let cancelled = false;
@@ -72,7 +98,10 @@ export function EvaluationPage() {
   );
   const current = filtered.filter(
     (t) =>
-      t.status === 'completed' && galleryVersion && t.report?.galleryVersion === galleryVersion,
+      t.status === 'completed' &&
+      t.report?.policy === EVALUATION_POLICY &&
+      galleryVersion &&
+      t.report?.galleryVersion === galleryVersion,
   );
   const reports = useMemo(
     () =>
@@ -105,8 +134,8 @@ export function EvaluationPage() {
       <Box>
         <Typography variant="h4">Evaluate recognition</Typography>
         <Typography color="text.secondary">
-          Compare one reference against multiple samples using fresh, manually labeled trials.
-          Experimental thresholds do not change Scan.
+          Evaluate all eligible samples using fresh, manually labeled trials. Experimental
+          thresholds do not change Scan.
         </Typography>
       </Box>
       {(error || live.error) && <Alert severity="error">{error || live.error}</Alert>}
@@ -237,7 +266,7 @@ export function EvaluationPage() {
             downloadJson(
               JSON.stringify(
                 {
-                  policy: 'evaluation-multisample-v1',
+                  policy: EVALUATION_POLICY,
                   currentGalleryVersion: galleryVersion,
                   trials: filtered,
                   experimentalReports: reports,
@@ -274,20 +303,14 @@ export function EvaluationPage() {
         failures/cancellations ·{' '}
         {
           filtered.filter(
-            (t) => t.status === 'completed' && t.report?.galleryVersion !== galleryVersion,
+            (t) =>
+              t.status === 'completed' &&
+              (t.report?.policy !== EVALUATION_POLICY ||
+                t.report?.galleryVersion !== galleryVersion),
           ).length
         }{' '}
         outdated/incompatible reports
       </Typography>
-      <TextField
-        select
-        label="Reference mode"
-        value={mode}
-        onChange={(e) => setMode(e.target.value)}
-      >
-        <MenuItem value="primary">Primary sample only</MenuItem>
-        <MenuItem value="all">All samples</MenuItem>
-      </TextField>
       <TableContainer component={Card}>
         <Table size="small" aria-label="Experimental threshold comparison">
           <TableHead>
@@ -337,13 +360,14 @@ export function EvaluationPage() {
               {t.status}
               {t.reason && ` · ${t.reason}`} ·{' '}
               {t.report?.excluded ||
-                (t.report?.galleryVersion === galleryVersion
+                (t.report?.policy === EVALUATION_POLICY &&
+                t.report?.galleryVersion === galleryVersion
                   ? 'Current report'
                   : 'Outdated — rerun required')}
             </Typography>
             {t.report?.excludedPeople > 0 && (
               <Typography>
-                {t.report.excludedPeople} people excluded: select an eligible primary sample.
+                {t.report.excludedPeople} people excluded under the historical report policy.
               </Typography>
             )}
             {['primary', 'all'].map((m) => {

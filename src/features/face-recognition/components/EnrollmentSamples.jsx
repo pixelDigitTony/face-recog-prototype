@@ -1,10 +1,12 @@
+import { LIGHTING_FEEDBACK } from '@/utils/hooks/faceRecognition/recognition/lightingQuality';
+import { livenessLabel } from '@/utils/hooks/faceRecognition/liveness/livenessPolicy';
 import { useState } from 'react';
-import { Alert, Avatar, Box, Button, Chip, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Avatar, Box, Button, Stack, TextField, Typography } from '@mui/material';
 import { useFaceServices } from '@/utils/hooks/faceRecognition/useLocalDatabase';
 import { compatibleTemplate } from '@/utils/hooks/faceRecognition/workflows/faceWorkflow';
 import { formatDate } from '@/utils/hooks/faceRecognition/tableFormatting';
 
-function SampleCard({ sample, primary, disabled, onReplace, commit, manifest }) {
+function SampleCard({ sample, disabled, onReplace, commit, manifest }) {
   const [label, setLabel] = useState(sample.label),
     [confirm, setConfirm] = useState(false);
   return (
@@ -18,9 +20,7 @@ function SampleCard({ sample, primary, disabled, onReplace, commit, manifest }) 
           —
         </Avatar>
         <Box sx={{ minWidth: 0 }}>
-          <Typography variant="body2">
-            {sample.label} {primary && <Chip size="small" label="Primary" />}
-          </Typography>
+          <Typography variant="body2">{sample.label}</Typography>
           <Typography variant="caption">
             {formatDate(sample.createdAt)} · {sample.enrollmentSource}
           </Typography>
@@ -32,11 +32,20 @@ function SampleCard({ sample, primary, disabled, onReplace, commit, manifest }) 
             ? 'Compatible model'
             : 'Incompatible model'
           : 'Load models to check compatibility'}{' '}
-        · {sample.enrollmentLiveness}
+        · {livenessLabel(sample.liveness ?? { status: sample.enrollmentLiveness })}
       </Typography>
       <Typography variant="caption" display="block">
-        Brightness: {sample.quality?.brightness?.toFixed(0) ?? '—'} · Sharpness:{' '}
-        {sample.quality?.blurVariance?.toFixed(0) ?? '—'}
+        Brightness: {sample.quality?.brightness?.toFixed(0) ?? 'Not recorded'} · Sharpness:{' '}
+        {sample.quality?.blurVariance?.toFixed(0) ?? 'Not recorded'}
+      </Typography>
+      <Typography variant="caption" display="block">
+        Lighting:{' '}
+        {sample.quality?.lighting?.warnings?.length
+          ? sample.quality.lighting.warnings.map((w) => LIGHTING_FEEDBACK[w]?.label ?? w).join(', ')
+          : sample.quality?.lighting
+            ? 'No warnings recorded'
+            : 'Not recorded'}
+        {' · '}Capture set: {sample.captureSetId ?? 'Not recorded'}
       </Typography>
       <TextField
         fullWidth
@@ -57,9 +66,6 @@ function SampleCard({ sample, primary, disabled, onReplace, commit, manifest }) 
         </Button>
         <Button disabled={disabled} onClick={() => onReplace(sample.id)}>
           Replace this sample
-        </Button>
-        <Button disabled={disabled || primary} onClick={() => commit('setPrimarySample', sample)}>
-          Set as primary
         </Button>
         <Button color="error" disabled={disabled} onClick={() => setConfirm(true)}>
           Delete sample
@@ -108,8 +114,11 @@ export function EnrollmentSamples({ person, samples, disabled, replaceTemplateId
         {person.displayName} · {samples.length}/5 face samples
       </Typography>
       <Typography variant="caption">
-        Add two or three clear variations across different days. New samples preserve previous
-        appearances.
+        Start with one clear, front-facing sample. Add another for a useful everyday difference,
+        such as makeup, glasses or a different day. More samples are not automatically more
+        accurate. Slight angles are optional; a guided set is one capture session. Use soft frontal
+        light, avoid backlighting and side shadows, and replace unclear references instead of
+        filling slots. Use labels such as No makeup, Usual makeup or Glasses - different day.
       </Typography>
       {samples.length === 5 && !replaceTemplateId && (
         <Alert severity="info">
@@ -128,7 +137,6 @@ export function EnrollmentSamples({ person, samples, disabled, replaceTemplateId
         <SampleCard
           key={sample.id}
           sample={sample}
-          primary={sample.id === person.primaryTemplateId}
           disabled={disabled}
           onReplace={onReplace}
           commit={commit}

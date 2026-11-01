@@ -555,7 +555,7 @@ describe('continuous identification and persistence', () => {
     });
     delete old.identificationEvents;
     const h = await harness(old);
-    expect(JSON.parse(h.raw()).schemaVersion).toBe(4);
+    expect(JSON.parse(h.raw()).schemaVersion).toBe(5);
     for (let i = 0; i < 3; i++) await h.step();
     const readOnly = createLocalStorageRepository({
       context,
@@ -726,7 +726,8 @@ describe('multi-sample live confirmation', () => {
     expect(() => validateDatabase(h.repo.getSnapshot().database, context)).not.toThrow();
     const before = h.engine.extractFaces.mock.calls.length;
     await h.repo.commit({
-      type: 'setPrimarySample',
+      type: 'renameSample',
+      label: 'Renamed reference',
       personId: 'p0',
       templateId: 'makeup',
       expectedEnrollmentRevision: 1,
@@ -737,7 +738,7 @@ describe('multi-sample live confirmation', () => {
       type: 'deleteSample',
       personId: 'p0',
       templateId: 'makeup',
-      expectedEnrollmentRevision: 2,
+      expectedEnrollmentRevision: 1,
     });
     await h.step();
     expect(h.flow.getSnapshot().faces[0].identification.tracked).toBe(false);

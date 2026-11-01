@@ -9,8 +9,8 @@ test('real browser enrollment, verification, database, reload and read-only tab'
   page.on('pageerror', (error) => errors.push(error.message));
   const network = [];
   page.on('request', (request) => network.push({ url: request.url(), method: request.method() }));
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Use test image', exact: true }).click();
+  await page.goto('/settings');
+  await page.getByRole('button', { name: 'Diagnostic image enrollment', exact: true }).click();
   await page.getByRole('button', { name: 'Add person', exact: true }).click();
   await page.getByLabel('Employee code').fill('TEST-001');
   await page.getByLabel('Full name').fill('Local Test Person');
@@ -30,7 +30,7 @@ test('real browser enrollment, verification, database, reload and read-only tab'
   expect(db.templates[0].embedding).toHaveLength(128);
   expect(db.attempts).toHaveLength(1);
   expect(db.templates[0].thumbnailDataUrl.length).toBeLessThanOrEqual(4096);
-  await page.getByRole('link', { name: 'Settings', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Return to settings', exact: true }).click();
   await page.getByRole('button', { name: 'Diagnostic image comparison', exact: true }).click();
   await page.getByRole('combobox').click();
   await page.getByRole('option', { name: /TEST-001/ }).click();
@@ -76,7 +76,9 @@ test('real browser enrollment, verification, database, reload and read-only tab'
   const observer = await context.newPage();
   await observer.goto('/enroll');
   await expect(observer.getByText(/Another tab is editing/)).toBeVisible();
-  await expect(observer.getByRole('button', { name: 'Add person', exact: true })).toBeDisabled();
+  await expect(
+    observer.getByRole('button', { name: 'Start live scan', exact: true }),
+  ).toBeDisabled();
   await observer.close();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/enroll');

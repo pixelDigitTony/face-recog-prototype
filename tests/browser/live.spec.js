@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
-test('completed enrollment stays enabled and the saved template matches with real SFace and simulated pose observations', async ({
+test('automatic enrollment saves once and the saved template matches with real SFace and simulated pose observations', async ({
   page,
 }) => {
   test.skip(
@@ -69,14 +69,12 @@ test('completed enrollment stays enabled and the saved template matches with rea
     { box: reference.records['lena.jpg'].box },
   );
   await page.goto('/enroll');
-  await page.getByRole('button', { name: 'Add person', exact: true }).click();
-  await page.getByLabel('Employee code').fill('LIVE-MATCH');
-  await page.getByLabel('Full name').fill('Live Match Fixture');
-  await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: 'Save person', exact: true }).click();
   await page.getByRole('button', { name: 'Start live scan', exact: true }).click();
-  const enroll = page.getByRole('button', { name: 'Capture & enroll', exact: true });
-  await expect(enroll).toBeEnabled({ timeout: 90000 });
+  const name = page.getByLabel("Detected person's name", { exact: true });
+  await expect(name).toBeVisible({ timeout: 90000 });
+  await name.fill('Live Match Fixture');
+  await name.press('Enter');
+  await expect(page.getByText('ENROLLED', { exact: true })).toBeVisible({ timeout: 90000 });
   const before = await page.evaluate(() => ({
     poses: window.testPoseCalls,
     frames: window.testAnalysisCalls,
@@ -85,10 +83,7 @@ test('completed enrollment stays enabled and the saved template matches with rea
     .poll(() => page.evaluate(() => window.testAnalysisCalls), { timeout: 10000 })
     .toBeGreaterThan(before.frames + 6);
   expect(await page.evaluate(() => window.testPoseCalls)).toBe(before.poses);
-  await expect(enroll).toBeEnabled();
-  await page.screenshot({ path: '.local/enrollment-latched-ready.png', fullPage: true });
-  await enroll.click();
-  await expect(page.getByText('ENROLLED', { exact: true })).toBeVisible({ timeout: 30000 });
+  await page.screenshot({ path: '.local/enrollment-automatic-completed.png', fullPage: true });
   await page.getByRole('link', { name: 'Scan face', exact: true }).first().click();
   await expect(page.getByRole('combobox')).toHaveCount(0);
   await page.getByRole('button', { name: 'Start scanning', exact: true }).click();
@@ -171,61 +166,84 @@ test('live camera controls, multiple face overlay geometry and mobile layout', a
   await page.screenshot({ path: '.local/live-mobile.png', fullPage: true });
   expect(errors).toEqual([]);
 });
-test('camera enrollment loads both real workers and never passes a blank camera', async ({
+test('enrollment discovery never offers a name or saves a blank camera', async ({
   page,
   context,
 }) => {
   await context.grantPermissions(['camera']);
   await page.goto('/enroll');
-  await page.getByRole('button', { name: 'Add person', exact: true }).click();
-  await page.getByLabel('Employee code').fill('CAMERA-001');
-  await page.getByLabel('Full name').fill('Camera Tester');
-  await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: 'Save person', exact: true }).click();
   await page.getByRole('button', { name: 'Start live scan', exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => document.querySelector('video')?.srcObject?.active), {
       timeout: 90000,
     })
     .toBe(true);
-  await expect(page.getByRole('button', { name: 'Capture & enroll', exact: true })).toBeDisabled();
-  await expect(page.getByTestId('no-face-instruction')).toContainText('Look straight ahead');
-  const instructions = page.getByRole('region', { name: 'Scan instructions' });
-  await expect(instructions).toContainText('Look straight ahead');
-  const instructionBox = await instructions.boundingBox(),
-    cameraBox = await page.locator('video').boundingBox();
-  expect(Math.abs(instructionBox.x - cameraBox.x)).toBeLessThan(1);
-  expect(Math.abs(instructionBox.y - cameraBox.y)).toBeLessThan(1);
-  expect(Math.abs(instructionBox.width - cameraBox.width)).toBeLessThan(1);
-  expect(
-    await instructions.evaluate((el) =>
-      Boolean(
-        el.compareDocumentPosition(document.querySelector('[aria-label="Detected faces"]')) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-      ),
-    ),
-  ).toBe(true);
-  await page.screenshot({ path: '.local/enrollment-instructions-desktop.png', fullPage: true });
+  await expect(page.getByLabel("Detected person's name", { exact: true })).toHaveCount(0);
+  await expect(page.getByText('No current face detections.', { exact: true })).toBeVisible();
+  await page.screenshot({ path: '.local/enrollment-no-face-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(instructions).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: '.local/enrollment-instructions-mobile.png', fullPage: true });
+  await page.screenshot({ path: '.local/enrollment-no-face-mobile.png', fullPage: true });
   await page.getByRole('button', { name: 'Stop', exact: true }).click();
 });
-test('missing liveness model blocks camera enrollment explicitly', async ({ page }) => {
+test('missing liveness model blocks named enrollment explicitly', async ({ page }) => {
   await page.route('**/models/face_landmarker.task', (route) =>
     route.fulfill({ status: 404, body: 'Missing liveness model' }),
   );
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    window.Worker = class {
+      constructor(url, options) {
+        if (String(url).includes('liveness.worker')) return new NativeWorker(url, options);
+      }
+      async postMessage({ requestId, type, payload }) {
+        let result = true;
+        if (type === 'initialize')
+          result = await (await fetch('/models/model-manifest.json')).json();
+        if (type === 'analyzeFrame')
+          result = {
+            faces: [{ box: [100, 100, 180, 200], confidence: 0.99, reasonCode: null, quality: {} }],
+            embedding: payload.includeEmbedding
+              ? Array.from({ length: 128 }, (_, i) => (i === 0 ? 1 : 0))
+              : null,
+          };
+        if (!this.stopped) this.onmessage?.({ data: { requestId, ok: true, result } });
+      }
+      terminate() {
+        this.stopped = true;
+      }
+    };
+    navigator.mediaDevices.getUserMedia = async () => {
+      const c = document.createElement('canvas');
+      c.width = 640;
+      c.height = 480;
+      const ctx = c.getContext('2d');
+      setInterval(() => ctx.fillRect(0, 0, 640, 480), 100);
+      return c.captureStream(10);
+    };
+  });
   await page.goto('/enroll');
-  await page.getByRole('button', { name: 'Add person', exact: true }).click();
-  await page.getByLabel('Employee code').fill('NO-LIVE');
-  await page.getByLabel('Full name').fill('Missing Model');
-  await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: 'Save person', exact: true }).click();
   await page.getByRole('button', { name: 'Start live scan', exact: true }).click();
-  await expect(page.getByText(/Liveness unavailable:/)).toBeVisible({ timeout: 90000 });
-  await expect(page.getByRole('button', { name: 'Capture & enroll', exact: true })).toBeDisabled();
+  const name = page.getByLabel("Detected person's name", { exact: true });
+  await name.fill('Missing Model');
+  await name.press('Enter');
+  await expect(
+    page.getByText(/Missing liveness asset|Missing liveness model|Missing model:/),
+  ).toBeVisible({
+    timeout: 90000,
+  });
+  expect(
+    await page.evaluate(
+      () =>
+        JSON.parse(
+          localStorage.getItem(
+            Object.keys(localStorage).find((k) => k.startsWith('stk:face-prototype:')),
+          ),
+        ).people.length,
+    ),
+  ).toBe(0);
 });
+
 test('real YuNet draws every face in a streamed two-person fixture without saving frames', async ({
   page,
 }) => {
@@ -249,11 +267,6 @@ test('real YuNet draws every face in a streamed two-person fixture without savin
     };
   });
   await page.goto('/enroll');
-  await page.getByRole('button', { name: 'Add person', exact: true }).click();
-  await page.getByLabel('Employee code').fill('BOX-001');
-  await page.getByLabel('Full name').fill('Tracked Box Tester');
-  await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: 'Save person', exact: true }).click();
   await page.getByRole('button', { name: 'Start live scan', exact: true }).click();
   await expect
     .poll(
@@ -271,11 +284,10 @@ test('real YuNet draws every face in a streamed two-person fixture without savin
   await expect(page.getByTestId('face-label')).toHaveCount(2);
   const camera = await page.getByTestId('live-camera').boundingBox();
   for (const label of await page.getByTestId('face-label').all()) {
-    await expect(label.getByTestId('face-instruction')).toHaveText('One person at a time');
-    const instruction = await label.getByTestId('face-instruction').boundingBox();
+    await expect(label.getByTestId('face-instruction')).toHaveCount(0);
     const details = await label.getByTestId('face-label-details').boundingBox();
     const bounds = await label.boundingBox();
-    expect(instruction.y + instruction.height).toBeLessThanOrEqual(details.y);
+    expect(details.y).toBeGreaterThanOrEqual(bounds.y);
     expect(bounds.x).toBeGreaterThanOrEqual(camera.x);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(camera.x + camera.width + 1);
     const trackId = await label.getAttribute('data-track-id');
@@ -284,9 +296,11 @@ test('real YuNet draws every face in a streamed two-person fixture without savin
       1,
     );
   }
-  await expect(page.getByRole('list', { name: 'Detected faces' })).toContainText(
-    'Multiple faces — verification paused',
-  );
+  await expect(
+    page
+      .getByRole('list', { name: 'Detected faces' })
+      .getByText('No eligible enrollments', { exact: true }),
+  ).toHaveCount(2);
   const records = await page.evaluate(
     () =>
       JSON.parse(
@@ -311,10 +325,10 @@ test('real YuNet draws every face in a streamed two-person fixture without savin
     })
     .toBe(true);
   for (const label of await page.getByTestId('face-label').all()) {
-    await expect(label.getByTestId('face-instruction')).toBeVisible();
-    const instruction = await label.getByTestId('face-instruction').boundingBox();
+    await expect(label.getByTestId('face-instruction')).toHaveCount(0);
     const details = await label.getByTestId('face-label-details').boundingBox();
-    expect(instruction.y + instruction.height).toBeLessThanOrEqual(details.y);
+    const bounds = await label.boundingBox();
+    expect(details.y).toBeGreaterThanOrEqual(bounds.y);
   }
   const mobilePanels = await Promise.all(
     (await page.getByTestId('face-label').all()).map((label) => label.boundingBox()),

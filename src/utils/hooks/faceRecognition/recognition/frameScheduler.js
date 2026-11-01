@@ -1,5 +1,5 @@
 // Schedule only after the previous pipeline finishes: no queued video frames.
-export function createFrameScheduler(video, analyze, onError) {
+export function createFrameScheduler(video, analyze, onError, intervalMs = 125) {
   let running = false,
     callbackId,
     timer,
@@ -13,7 +13,7 @@ export function createFrameScheduler(video, analyze, onError) {
   };
   async function tick(now) {
     if (!running) return;
-    if (now - lastStart < 125 || video.currentTime === lastMedia || video.readyState < 2) {
+    if (now - lastStart < intervalMs || video.currentTime === lastMedia || video.readyState < 2) {
       schedule();
       return;
     }
@@ -25,7 +25,7 @@ export function createFrameScheduler(video, analyze, onError) {
     } catch (error) {
       if (running) onError(error);
     }
-    if (running) timer = setTimeout(schedule, Math.max(0, 125 - (performance.now() - now)));
+    if (running) timer = setTimeout(schedule, Math.max(0, intervalMs - (performance.now() - now)));
   }
   return {
     start() {

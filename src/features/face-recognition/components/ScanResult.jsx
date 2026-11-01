@@ -1,3 +1,4 @@
+import { livenessLabel } from '@/utils/hooks/faceRecognition/liveness/livenessPolicy';
 import { Alert, Box, Button, Chip, Divider, Stack, Typography } from '@mui/material';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useState } from 'react';
@@ -43,6 +44,9 @@ export function ScanResult({ workflow }) {
           <Typography variant="body2" color="text.secondary">
             {result.personSnapshot.employeeCode} ·{' '}
             {result.purpose === 'enroll' ? 'Enrollment' : 'Verification'}
+          </Typography>
+          <Typography variant="body2">
+            Liveness: {livenessLabel(result.liveness ?? { status: result.livenessStatus })}
           </Typography>
           <Divider />
           <Stack direction="row" spacing={4}>

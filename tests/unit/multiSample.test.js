@@ -129,8 +129,8 @@ describe('multi-sample recognition and migration', () => {
     const before = JSON.stringify(db),
       next = migrateDatabase(db, context);
     expect(JSON.stringify(db)).toBe(before);
-    expect(next.schemaVersion).toBe(4);
-    expect(next.people[0]).toMatchObject({ primaryTemplateId: 't0', enrollmentRevision: 1 });
+    expect(next.schemaVersion).toBe(5);
+    expect(next.people[0]).toMatchObject({ enrollmentRevision: 1 });
     expect(next.templates[0].label).toBe('Original sample');
     expect(() => validateDatabase(next, context)).not.toThrow();
   });
@@ -161,7 +161,7 @@ describe('multi-sample recognition and migration', () => {
     expect(h.raw()).toBe(before);
     h.repo.dispose();
   });
-  it('deletes individual samples, reassigns primary, rejects stale revisions and leaves person unenrolled', async () => {
+  it('deletes samples without selecting a primary, rejects stale revisions and leaves person unenrolled', async () => {
     const db = fixture();
     db.templates.push({ ...db.templates[0], id: 'other', version: 2 });
     const h = await harness(db);
@@ -171,7 +171,7 @@ describe('multi-sample recognition and migration', () => {
       templateId: 't0',
       expectedEnrollmentRevision: 1,
     });
-    expect(h.repo.getSnapshot().database.people[0].primaryTemplateId).toBe('other');
+    expect(h.repo.getSnapshot().database.templates.some((t) => t.id === 'other')).toBe(true);
     await expect(
       h.repo.commit({
         type: 'deleteSample',
@@ -187,7 +187,6 @@ describe('multi-sample recognition and migration', () => {
       expectedEnrollmentRevision: 2,
     });
     expect(h.repo.getSnapshot().database.people[0]).toMatchObject({
-      primaryTemplateId: null,
       enrollmentRevision: 3,
     });
     h.repo.dispose();
@@ -214,7 +213,7 @@ describe('independent recognition evaluation', () => {
     const g = await buildEnrollmentGallery(db, manifest, context),
       t = trial(g, 'p0', vector(2)),
       r = evaluateTrial(t, g, manifest);
-    expect(r.modes.primary.find((x) => x.threshold === 0.85).category).toBe('missed');
+    expect(r.modes.primary).toBeUndefined();
     expect(r.modes.all.find((x) => x.threshold === 0.85).category).toBe('correct');
     expect(db.settings.matchThreshold).toBe(0.85);
   });
@@ -234,13 +233,13 @@ describe('independent recognition evaluation', () => {
     });
     expect(evaluationSummary([], 'all', 0.85).enrolled).toBe(0);
   });
-  it('excludes incompatible models and unequal paired populations', async () => {
+  it('includes people with any eligible sample and excludes incompatible models', async () => {
     const db = fixture();
     db.templates[0].enrollmentSource = 'test_image';
     db.templates.push({ ...db.templates[0], id: 'eligible', enrollmentSource: 'live_camera' });
     const g = await buildEnrollmentGallery(db, manifest, context),
       t = trial(g);
-    expect(evaluateTrial(t, g, manifest).modes.all[0].category).toBe('excluded');
+    expect(evaluateTrial(t, g, manifest).modes.all[0].category).toBe('correct');
     expect(evaluateTrial(t, g, { ...manifest, preprocessingVersion: 'v2' }).excluded).toMatch(
       /incompatible/,
     );

@@ -1,5 +1,7 @@
 # STK per-face closest records, thumbnails and lighting feedback
 
+Current amendment: [Equal samples, configurable liveness and guided enrollment](ANTHONYS_FACE_LAB_SAMPLE_MATCHING_AND_CONFIGURABLE_LIVENESS_SPEC.md) supersedes primary-sample selection, schema-4 storage and paired evaluation for new results. Historical policies retain their recorded meaning.
+
 Current multi-sample behavior supersedes single-template assumptions: see [Anthony's Face Lab multi-sample specification](ANTHONYS_FACE_LAB_MULTI_SAMPLE_EVALUATION_SPEC.md). Scan now uses `identify-85-multisample-v3`; historical policies retain their original rules.
 
 Status: **Implemented locally — see IMPLEMENTATION.md for validation and remaining physical-camera acceptance.**

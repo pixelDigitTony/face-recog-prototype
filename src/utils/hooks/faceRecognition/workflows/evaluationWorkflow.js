@@ -1,6 +1,12 @@
 import { buildEnrollmentGallery } from '../recognition/enrollmentGallery';
 import { createFaceTracker } from '../recognition/faceTracker';
 import { EVALUATION_POLICY } from '../recognition/evaluation';
+import {
+  COMPARATIVE_POLICY,
+  resolveReferencePlan,
+  validateComparativeMetadata,
+  assertIndependentProbe,
+} from '../recognition/evaluationReferencePlan';
 
 export function createEvaluationWorkflow({
   repository,
@@ -50,7 +56,7 @@ export function createEvaluationWorkflow({
       return () => listeners.delete(fn);
     },
     getSnapshot: () => state,
-    async start({ personId, participantLabel, notes = '' }) {
+    async start({ personId, participantLabel, notes = '', referencePlan, ...conditions }) {
       if (busy || state.pending) throw new Error('Finish or discard the pending trial first.');
       const token = ++generation;
       await repository.load();
@@ -65,8 +71,10 @@ export function createEvaluationWorkflow({
       const label = person ? person.displayName : participantLabel.trim();
       if (!label) throw new Error('Enter a participant label.');
       const gallery = await buildEnrollmentGallery(db, engine.manifest, context);
+      if (referencePlan)
+        await resolveReferencePlan(referencePlan, gallery, engine.manifest, context);
       if (token !== generation) return;
-      trial = {
+      const nextTrial = {
         id: crypto.randomUUID(),
         companyId: context.companyId,
         storeId: context.storeId ?? null,
@@ -74,13 +82,32 @@ export function createEvaluationWorkflow({
         participantLabel: label,
         notes: notes.trim(),
         createdAt: new Date().toISOString(),
-        policy: EVALUATION_POLICY,
+        policy: referencePlan ? COMPARATIVE_POLICY : EVALUATION_POLICY,
+        ...(referencePlan
+          ? {
+              ...Object.fromEntries(
+                [
+                  'captureSessionLabel',
+                  'lighting',
+                  'appearance',
+                  'pose',
+                  'independentCaptureConfirmed',
+                  'unknownParticipantConfirmed',
+                ].map((k) => [k, conditions[k]]),
+              ),
+              protocolVersion: 1,
+              referencePlan: structuredClone(referencePlan),
+              sessionId: crypto.randomUUID(),
+            }
+          : {}),
         galleryVersion: gallery.version,
         modelIdentity: engine.manifest,
         preprocessingVersion: engine.manifest.preprocessingVersion,
         source: 'live_camera',
         livenessStatus: 'not_checked',
       };
+      if (referencePlan) validateComparativeMetadata(nextTrial);
+      trial = nextTrial;
       observations = [];
       last = -Infinity;
       trackId = null;
@@ -94,6 +121,12 @@ export function createEvaluationWorkflow({
       last = timestamp;
       const token = generation;
       try {
+        if (trial?.referencePlan) {
+          const database = repository.getSnapshot().database;
+          const gallery = await buildEnrollmentGallery(database, engine.manifest, context);
+          await resolveReferencePlan(trial.referencePlan, gallery, engine.manifest, context);
+        }
+        if (token !== generation) return;
         const result = await engine.analyzeFrame(frame, { includeEmbedding: true });
         if (token !== generation) return;
         lastDelivery = now();
@@ -125,6 +158,8 @@ export function createEvaluationWorkflow({
           timestamp,
           quality: face.quality || result.quality || {},
         });
+        if (trial.referencePlan)
+          assertIndependentProbe({ ...trial, observations }, repository.getSnapshot().database);
         publish({ count: observations.length });
         if (observations.length === 3) await finish('completed', null, token);
       } catch (error) {

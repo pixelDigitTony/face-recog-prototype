@@ -53,6 +53,31 @@ test('WASM pipeline agrees with native OpenCV and runs offline after initializat
       width: doubleFrame.width,
       height: doubleFrame.height,
     });
+    results.multipleAnalysis = await engine.analyzeFrame(
+      { data: doubleFrame.data, width: double.width, height: double.height },
+      { includeEmbedding: true, analyzeAllFaces: true },
+    );
+    // Compare against the existing retained-frame extraction path using the
+    // exact same scene; a different detector context can change raw similarity.
+    await engine.setGallery({
+      version: 'per-face-parity',
+      entries: results.multipleAnalysis.faceEmbeddings.map((face, i) => ({
+        personId: `face${i}`,
+        templateId: `reference${i}`,
+        templateVersion: 1,
+        embedding: face.embedding,
+      })),
+    });
+    await engine.detectFrame(
+      { data: doubleFrame.data, width: double.width, height: double.height },
+      'per-face-parity',
+    );
+    results.multipleReplay = await engine.extractFaces(
+      'per-face-parity',
+      [0, 1],
+      'per-face-parity',
+    );
+    await engine.releaseFrame('per-face-parity');
     window.parityEngine = engine;
     window.parityFrame = frames['lena.jpg'];
     return results;
@@ -87,6 +112,16 @@ test('WASM pipeline agrees with native OpenCV and runs offline after initializat
   expect(result.blank.outcome).toBe('NO_FACE');
   expect(result['messi5.jpg'].outcome).toBe('LOW_QUALITY');
   expect(result.multiple.outcome).toBe('MULTIPLE_FACES');
+  expect(result.multipleAnalysis.faceEmbeddings).toHaveLength(2);
+  expect(new Set(result.multipleAnalysis.faceEmbeddings.map((face) => face.detectionId)).size).toBe(
+    2,
+  );
+  for (const face of result.multipleAnalysis.faceEmbeddings) {
+    expect(face.embedding).toHaveLength(128);
+    expect(Math.hypot(...face.embedding)).toBeCloseTo(1, 5);
+  }
+  expect(result.multipleReplay.results).toHaveLength(2);
+  expect(result.multipleReplay.results.every((face) => face.ranking.similarity > 0.999)).toBe(true);
   await context.setOffline(true);
   const offline = await page.evaluate(() => window.parityEngine.extract(window.parityFrame));
   expect(offline.embedding).toHaveLength(128);
@@ -105,9 +140,8 @@ test('a missing model reports a readiness error without inserting capture record
     route.fulfill({ status: 404, body: 'Missing model' }),
   );
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Add person', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: 'Use test image', exact: true }).click();
-  await page.getByRole('button', { name: 'Load models', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Start live scan', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Start live scan', exact: true }).click();
   await expect(page.getByText(/Missing model:/)).toBeVisible({ timeout: 30000 });
   expect(
     await page.evaluate(() => {
@@ -123,14 +157,14 @@ test('unsupported write coordination keeps the application read-only', async ({ 
   });
   await page.goto('/');
   await expect(page.getByText(/does not support Web Locks/)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Add person', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Start live scan', exact: true })).toBeDisabled();
 });
 
 test('corrupt storage preserves original data and scoped reset leaves other keys intact', async ({
   page,
 }) => {
   await page.goto('/');
-  await expect(page.getByRole('button', { name: 'Add person', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Start live scan', exact: true })).toBeEnabled();
   await page.evaluate(() => {
     localStorage.setItem('unrelated-stk-key', 'keep');
     const key = Object.keys(localStorage).find((key) => key.startsWith('stk:face-prototype:'));
@@ -138,12 +172,12 @@ test('corrupt storage preserves original data and scoped reset leaves other keys
   });
   await page.reload();
   await expect(page.getByText(/Use Settings to explicitly reset/)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Add person', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Start live scan', exact: true })).toBeDisabled();
   await page.getByRole('link', { name: 'Settings', exact: true }).first().click();
   await page.getByRole('button', { name: 'Reset prototype database', exact: true }).click();
   await page.getByRole('button', { name: 'Delete data', exact: true }).click();
   await expect(page.getByRole('dialog')).not.toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('unrelated-stk-key'))).toBe('keep');
   await page.getByRole('link', { name: 'Enroll', exact: true }).first().click();
-  await expect(page.getByRole('button', { name: 'Add person', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Start live scan', exact: true })).toBeEnabled();
 });

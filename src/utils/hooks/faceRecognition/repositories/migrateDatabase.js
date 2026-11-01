@@ -1,19 +1,22 @@
+import { DEFAULT_LIVENESS } from '../liveness/livenessPolicy';
 import { validateDatabase } from './databaseSchema';
 import { percentage } from '../recognition/matchPolicy';
 export function migrateDatabase(original, scope) {
-  if (![1, 2, 3].includes(original.schemaVersion)) return validateDatabase(original, scope);
+  if (![1, 2, 3, 4].includes(original.schemaVersion)) return validateDatabase(original, scope);
   validateDatabase(original, scope, original.schemaVersion === 1 ? true : original.schemaVersion);
   const db = structuredClone(original);
-  db.schemaVersion = 4;
+  db.schemaVersion = 5;
+  db.settings.enrollmentLiveness = { ...DEFAULT_LIVENESS };
   db.identificationEvents ||= [];
-  db.evaluationTrials = [];
+  db.evaluationTrials ||= [];
   for (const person of db.people) {
-    person.primaryTemplateId = person.activeTemplateId;
+    person.enrollmentRevision ??=
+      db.templates.find((t) => t.id === person.activeTemplateId)?.version ?? 0;
+    delete person.primaryTemplateId;
     delete person.activeTemplateId;
-    person.enrollmentRevision =
-      db.templates.find((t) => t.id === person.primaryTemplateId)?.version ?? 0;
   }
-  for (const template of db.templates) template.label = 'Original sample';
+  if (original.schemaVersion < 4)
+    for (const template of db.templates) template.label = 'Original sample';
   db.revision++;
   db.updatedAt = new Date().toISOString();
   if (original.schemaVersion === 1) {

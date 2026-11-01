@@ -189,7 +189,7 @@ export function App() {
           >
             Prototype — data stays in this browser.{' '}
             {location.pathname === '/enroll'
-              ? 'Enrollment uses a basic motion challenge.'
+              ? 'Enrollment checks are configurable in Settings.'
               : 'Automatic identification is experimental.'}
           </Alert>
           {state.mode === 'loading' && <LinearProgress sx={{ mb: 2 }} />}

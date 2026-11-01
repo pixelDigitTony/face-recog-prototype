@@ -1,0 +1,690 @@
+import { createFaceTracker, boxIoU } from '../recognition/faceTracker';
+import { createEnrollmentDiscovery } from '../recognition/enrollmentDiscovery';
+import { createActiveChallenge } from '../liveness/activeChallenge';
+import { associateFacePoses } from '../liveness/associateFacePoses';
+import {
+  DEFAULT_LIVENESS,
+  CHALLENGE_POLICY,
+  MULTI_ENROLLMENT_POLICY,
+  challengeReady,
+} from '../liveness/livenessPolicy';
+import { cosineSimilarity } from '../recognition/cosineSimilarity';
+import { thumbnail } from '../recognition/imageQuality';
+import { LIVE_TIMING } from '../recognition/liveTiming';
+
+const terminal = (status) =>
+  [
+    'review',
+    'saving_set',
+    'set_save_failed',
+    'save_failed',
+    'retrying',
+    'saved',
+    'completed',
+    'cancelled',
+  ].includes(status);
+export function createMultiEnrollmentWorkflow({
+  repository,
+  engine,
+  liveness,
+  workflow,
+  context,
+  now = () => performance.now(),
+}) {
+  const listeners = new Set(),
+    tracker = createFaceTracker(),
+    sessions = new Map();
+  const discovery = createEnrollmentDiscovery({ repository, engine, context, now });
+  let state = {
+    status: 'idle',
+    faces: [],
+    result: null,
+    review: null,
+    error: null,
+    liveness: { configuration: {} },
+    enrollmentPerson: null,
+    sessions: [],
+  };
+  let generation = 0,
+    processing = false,
+    poseBusy = false,
+    configuringPose = false,
+    poseTask = null,
+    bindingQueue = Promise.resolve(),
+    lastComparison = -Infinity,
+    lastFrameAt = null,
+    faces = [],
+    poses = new Map();
+  const publish = (patch) => {
+    state = { ...state, ...patch };
+    listeners.forEach((fn) => fn());
+  };
+  const view = (session) => ({
+    trackId: session.trackId,
+    person: session.person,
+    status: session.status,
+    error: session.error ?? null,
+    active: !terminal(session.status),
+    liveness: {
+      ...session.challenge.snapshot(),
+      ...(challengeReady(session.challenge.snapshot()) ? { prompt: capturePrompt(session) } : {}),
+    },
+    guided: session.guided,
+    stage: session.captures.length,
+    review: session.review ?? null,
+    result: session.result ?? null,
+    visible: faces.some((face) => face.trackId === session.trackId),
+  });
+  function display(patch = {}) {
+    const analyses = new Map(discovery.all().map((item) => [item.trackId, item]));
+    const visible = faces.map((face) => ({
+      ...face,
+      discovery: analyses.has(face.trackId)
+        ? (({ embedding, presentation, ...rest }) => rest)(analyses.get(face.trackId))
+        : null,
+      identification: analyses.get(face.trackId)?.presentation ?? {
+        status: 'waiting_for_analysis',
+        similarity: null,
+        closestCandidate: null,
+      },
+      enrollment: sessions.has(face.trackId) ? view(sessions.get(face.trackId)) : null,
+    }));
+    const active = [...sessions.values()].filter((s) => !terminal(s.status));
+    publish({
+      ...patch,
+      faces: visible,
+      sessions: [...sessions.values()].map(view),
+      discovery: faces.length === 1 ? visible[0]?.discovery : null,
+      similarity: faces.length === 1 ? visible[0]?.identification.similarity : null,
+      needsIndependentPose: active.some((s) => s.settings.enrollmentLiveness.blink),
+      enrollmentPerson:
+        faces.length === 1 ? (sessions.get(faces[0].trackId)?.person ?? null) : null,
+      liveness:
+        faces.length === 1
+          ? (sessions.get(faces[0].trackId)?.challenge.snapshot() ?? { configuration: {} })
+          : { configuration: {} },
+    });
+  }
+  function cancelSession(s, message) {
+    s.controller.abort();
+    s.status = 'cancelled';
+    s.error = message;
+    s.candidate = null;
+    s.review = null;
+    s.captures = [];
+  }
+  function valid(s) {
+    const person = repository.getSnapshot().database?.people.find((p) => p.id === s.person.id);
+    return (
+      repository.getSnapshot().mode === 'writable' &&
+      (s.newPerson
+        ? !person
+        : person?.enrollmentRevision === s.person.enrollmentRevision &&
+          person.acknowledgedAt === s.person.acknowledgedAt)
+    );
+  }
+  const capturePrompt = (s) =>
+    s.guided
+      ? [
+          'Face forward — capture Front',
+          'Turn slightly left (10–20°) — capture Slight left',
+          'Turn slightly right (10–20°) — capture Slight right',
+        ][s.captures.length]
+      : 'Face forward for capture';
+  function inPose(s, yaw, live) {
+    const relative = yaw - (live.neutralYaw ?? 0),
+      stage = s.guided ? s.captures.length : 0;
+    return stage === 0
+      ? Math.abs(relative) <= 10
+      : stage === 1
+        ? relative >= 10 && relative <= 20
+        : relative <= -10 && relative >= -20;
+  }
+  async function capture(s, face, embedding, frame, timestamp, association, token) {
+    const live = s.challenge.snapshot();
+    const shot = { ...frame };
+    const thumb = s.settings.saveThumbnails ? await thumbnail(shot, face) : {};
+    if (token !== generation || s.controller.signal.aborted) return;
+    if (!valid(s)) {
+      cancelSession(s, 'Enrollment changed. Confirm this face again.');
+      return;
+    }
+    if (now() - timestamp > 1500) {
+      s.candidate = null;
+      s.status = 'preparing_enrollment';
+      return;
+    }
+    const consistency = cosineSimilarity(embedding, s.candidate.embedding);
+    const prepared = {
+      outcome: 'ENROLLED',
+      newPerson: s.newPerson,
+      expectedEnrollmentRevision: s.person.enrollmentRevision,
+      replaceTemplateId: s.replaceTemplateId,
+      sampleLabel: s.sampleLabel,
+      sessionId: s.id,
+      enrollmentPolicyVersion: MULTI_ENROLLMENT_POLICY,
+      similarity: null,
+      extracted: {
+        embedding: [...embedding],
+        faces: [face],
+        quality: face.quality ?? {},
+        modelIdentity: engine.manifest,
+        preprocessingVersion: engine.manifest.preprocessingVersion,
+        qualityPolicyVersion: engine.manifest.qualityPolicyVersion,
+        timingsMs: {},
+        ...thumb,
+      },
+      liveness: {
+        ...live,
+        method: 'per_face_enrollment',
+        policyVersion: CHALLENGE_POLICY,
+        sessionId: s.id,
+        trackId: s.trackId,
+        assetIdentity: liveness.manifest?.sha256 ?? null,
+      },
+      metadata: {
+        captureConsistency: consistency,
+        captureYaw: association.pose.yaw,
+        neutralYaw: live.neutralYaw ?? 0,
+        trackId: s.trackId,
+        sourceTrackId: s.trackId,
+        faceCountAtDecision: faces.length,
+        targetFaceCountAtDecision: 1,
+        maxFaceCountObserved: s.maxFaces,
+        decisionTimestamp: now(),
+        captureFrameTimestamp: timestamp,
+        poseTimestamp: association.pose.timestamp,
+        associationPolicy: 'exclusive-iou-v1',
+        associationAmbiguous: false,
+        poseAssociationIoU: boxIoU(face.box, association.pose.box),
+        detectionId: face.detectionId,
+        targetBox: [...face.box],
+        poseBox: [...association.pose.box],
+        poseTrackId: s.trackId,
+        capturePose: ['front', 'slight_left', 'slight_right'][s.guided ? s.captures.length : 0],
+        stableSampleCount: 0,
+        stableDurationMs: 0,
+        scoreAggregation: 'last',
+      },
+    };
+    s.status = 'saving';
+    display();
+    if (s.guided) {
+      const operation = await workflow.prepareEnrollment({
+        personId: s.person.id,
+        signal: s.controller.signal,
+        prepared,
+      });
+      if (token !== generation || s.controller.signal.aborted) return;
+      const index = s.captures.length;
+      operation.template.version += index;
+      operation.attempt.templateVersion = operation.template.version;
+      operation.template.label = ['Front', 'Slight left', 'Slight right'][index];
+      operation.template.captureSetId = s.captureSetId;
+      operation.attempt.captureSetId = s.captureSetId;
+      s.captures.push(operation);
+      s.candidate = null;
+      s.hold = null;
+      s.status = s.captures.length === 3 ? 'review' : 'preparing_enrollment';
+      if (s.status === 'review')
+        s.review = s.captures.map((c) => ({
+          label: c.template.label,
+          thumbnailDataUrl: c.template.thumbnailDataUrl,
+        }));
+    } else {
+      const result = await workflow.savePrepared('enroll', {
+        personId: s.person.id,
+        signal: s.controller.signal,
+        prepared,
+      });
+      if (token !== generation) {
+        if (!result.persisted) workflow.discard(result.attemptId);
+        return;
+      }
+      s.result = result;
+      s.candidate = null;
+      s.status = result.persisted ? 'saved' : 'save_failed';
+      s.error = result.error ?? null;
+      publish({ result });
+    }
+  }
+  const api = {
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    getSnapshot: () => state,
+    async start() {
+      if (processing) throw new Error('Previous frame is finishing. Try again.');
+      api.stop();
+      generation++;
+      const token = generation;
+      publish({
+        status: 'loading',
+        faces: [],
+        sessions: [],
+        result: null,
+        error: null,
+        review: null,
+        sessionId: crypto.randomUUID(),
+      });
+      await repository.load();
+      if (repository.getSnapshot().mode !== 'writable') throw new Error('Use the writable tab.');
+      await engine.initialize();
+      if (token !== generation) return;
+      tracker.reset();
+      discovery.reset();
+      lastComparison = -Infinity;
+      lastFrameAt = null;
+      publish({ status: 'tracking' });
+    },
+    nameDetectedFace(options) {
+      const token = generation;
+      const bind = async () => {
+        const {
+          trackId,
+          name,
+          personId = null,
+          acknowledged = false,
+          guided = false,
+          replaceTemplateId = null,
+          sampleLabel = '',
+        } = options;
+        if (token !== generation || !['tracking', 'completed'].includes(state.status))
+          throw new Error('Start live matching first.');
+        const prior = sessions.get(trackId);
+        if (prior && !['saved', 'completed', 'cancelled'].includes(prior.status))
+          throw new Error('This face already has an enrollment in progress.');
+        if (!acknowledged) throw new Error('Confirm browser-local storage.');
+        if (
+          [...sessions.values()].filter(
+            (s) => !['saved', 'completed', 'cancelled'].includes(s.status),
+          ).length >= 10
+        )
+          throw new Error(
+            'Finish or discard one of the ten pending enrollments before starting another.',
+          );
+        const claimed = await discovery.claim({ trackId, personId, allowMultiple: true });
+        const db = repository.getSnapshot().database,
+          existing = personId && db.people.find((p) => p.id === personId && p.acknowledgedAt);
+        const displayName = name?.trim();
+        if (personId && !existing) throw new Error('Enrollment changed. Match again.');
+        if (!existing && (!displayName || displayName.length > 120))
+          throw new Error('Enter a name (1–120 characters).');
+        if (
+          !existing &&
+          (db.people.some(
+            (p) => p.displayName.trim().toLowerCase() === displayName.toLowerCase(),
+          ) ||
+            [...sessions.values()].some(
+              (s) =>
+                s.trackId !== trackId &&
+                s.person.displayName.toLowerCase() === displayName.toLowerCase() &&
+                !['cancelled'].includes(s.status),
+            ))
+        )
+          throw new Error(
+            'This name already exists or is being enrolled. Use a distinct name or match its record.',
+          );
+        if (
+          existing &&
+          [...sessions.values()].some(
+            (s) => s.trackId !== trackId && s.person.id === existing.id && !terminal(s.status),
+          )
+        )
+          throw new Error('This enrollee already has a capture in progress.');
+        const samples = db.templates.filter((t) => t.personId === personId);
+        if (
+          (replaceTemplateId && !samples.some((s) => s.id === replaceTemplateId)) ||
+          (!replaceTemplateId && samples.length + (guided ? 3 : 1) > 5)
+        )
+          throw new Error('Not enough sample slots.');
+        const settings = structuredClone(db.settings);
+        settings.enrollmentLiveness ??= structuredClone(DEFAULT_LIVENESS);
+        const blink =
+          settings.enrollmentLiveness.blink ||
+          [...sessions.values()].some(
+            (s) => !terminal(s.status) && s.settings.enrollmentLiveness.blink,
+          );
+        configuringPose = true;
+        try {
+          if (poseTask) await poseTask;
+          if (token !== generation) return;
+          await liveness.initialize({ blink, numFaces: 10 });
+        } finally {
+          configuringPose = false;
+        }
+        if (token !== generation) return;
+        await discovery.claim({ trackId, personId, allowMultiple: true });
+        if (token !== generation) return;
+        const id = crypto.randomUUID(),
+          person = existing ?? {
+            id,
+            displayName,
+            employeeCode: `FACE-${id}`,
+            normalizedEmployeeCode: `face-${id}`,
+            companyId: context.companyId,
+            storeId: context.storeId ?? null,
+            department: '',
+            acknowledgedAt: new Date().toISOString(),
+            enrollmentRevision: 0,
+            createdAt: new Date().toISOString(),
+          };
+        sessions.set(trackId, {
+          trackId,
+          id: crypto.randomUUID(),
+          person: structuredClone(person),
+          newPerson: existing ? null : person,
+          settings,
+          manifest: structuredClone(engine.manifest),
+          challenge: createActiveChallenge({ configuration: settings.enrollmentLiveness }),
+          controller: new AbortController(),
+          guided,
+          replaceTemplateId,
+          sampleLabel,
+          captures: [],
+          captureSetId: crypto.randomUUID(),
+          candidate: null,
+          hold: null,
+          lastSeen: claimed.timestamp,
+          maxFaces: faces.length,
+          status: 'challenging',
+        });
+        display({ error: null });
+      };
+      const result = bindingQueue.then(bind);
+      bindingQueue = result.catch(() => {});
+      return result;
+    },
+    async observePose(frame, timestamp) {
+      if (poseBusy || configuringPose || ![...sessions.values()].some((s) => !terminal(s.status)))
+        return;
+      poseBusy = true;
+      const token = generation;
+      try {
+        const task = liveness.observe(frame, timestamp);
+        poseTask = task;
+        const result = await task;
+        if (token !== generation) return;
+        const observations = result.faces ?? (result.box ? [result] : []);
+        const associated = associateFacePoses(
+          faces,
+          observations.map((p) => ({ ...p, timestamp })),
+        );
+        for (const [id, match] of associated) match.pose = { ...match.pose, sourceTrackId: id };
+        poses = associated;
+        for (const s of sessions.values())
+          if (!terminal(s.status)) {
+            const match = associated.get(s.trackId);
+            if (!match || now() - timestamp > 1500) {
+              s.challenge.pause();
+              continue;
+            }
+            s.challenge.update({ ...match.pose, fresh: true });
+          }
+        display();
+      } finally {
+        poseBusy = false;
+        poseTask = null;
+      }
+    },
+    async process(frame, timestamp) {
+      if (processing || !['tracking', 'completed'].includes(state.status)) return;
+      processing = true;
+      const token = generation;
+      try {
+        if (repository.getSnapshot().mode !== 'writable')
+          throw new Error('Browser storage is no longer writable.');
+        const active = [...sessions.values()].some((s) => !terminal(s.status));
+        const includeEmbedding =
+          (discovery.needsEmbedding() || active) && timestamp - lastComparison >= 334;
+        const extracted = await engine.analyzeFrame(frame, {
+          includeEmbedding,
+          analyzeAllFaces: true,
+        });
+        if (token !== generation) return;
+        if (now() - timestamp > 1500) {
+          for (const s of sessions.values()) if (!terminal(s.status)) s.challenge.pause();
+          faces = [];
+          discovery.reset();
+          display({ error: 'Analysis delayed. Hold still.' });
+          return;
+        }
+        faces = tracker.update(
+          extracted.faces.map((f, i) => ({ ...f, detectionId: f.detectionId ?? i })),
+          timestamp,
+        ).faces;
+        lastFrameAt = timestamp;
+        const vectors = includeEmbedding
+          ? (extracted.faceEmbeddings ??
+            (faces.length === 1 && extracted.embedding
+              ? [{ detectionId: faces[0].detectionId, embedding: extracted.embedding }]
+              : []))
+          : [];
+        if (vectors.length) lastComparison = timestamp;
+        await discovery.observe(faces, null, timestamp, vectors);
+        if (token !== generation) return;
+        for (const s of sessions.values())
+          if (!terminal(s.status)) {
+            const face = faces.find((f) => f.trackId === s.trackId);
+            if (face?.ambiguous || (!face && timestamp - s.lastSeen > 1500))
+              cancelSession(s, 'Face association was lost. Confirm this person again.');
+            if (face) {
+              s.lastSeen = timestamp;
+              s.maxFaces = Math.max(s.maxFaces, faces.length);
+            }
+          }
+        for (const [id, s] of sessions)
+          if (
+            !faces.some((face) => face.trackId === id) &&
+            ['saved', 'completed', 'cancelled'].includes(s.status)
+          )
+            sessions.delete(id);
+        display({ frameSize: [frame.width, frame.height], lastFrameAt: timestamp });
+        if (
+          [...sessions.values()].some((s) => !terminal(s.status)) &&
+          !poseBusy &&
+          !state.needsIndependentPose
+        )
+          await api.observePose(frame, timestamp);
+        if (token !== generation) return;
+        const freshAssociations = associateFacePoses(
+          faces,
+          [...poses.values()].map((match) => match.pose),
+        );
+        for (const s of sessions.values()) {
+          if (terminal(s.status)) continue;
+          const face = faces.find((f) => f.trackId === s.trackId),
+            match = freshAssociations.get(s.trackId),
+            live = s.challenge.snapshot();
+          if (
+            !face ||
+            face.reasonCode ||
+            face.ambiguous ||
+            !match ||
+            match.pose.sourceTrackId !== s.trackId ||
+            now() - match.pose.timestamp > 1500 ||
+            boxIoU(face.box, match.pose.box) < 0.35
+          ) {
+            s.hold = null;
+            s.challenge.pause();
+            s.status = 'quality_blocked';
+            continue;
+          }
+          if (!valid(s)) {
+            cancelSession(s, 'Enrollment changed. Confirm this person again.');
+            continue;
+          }
+          if (!challengeReady(live)) {
+            s.status = 'challenging';
+            continue;
+          }
+          if (
+            !Number.isFinite(live.lastValidatedAt) ||
+            now() - live.lastValidatedAt > 1500 ||
+            timestamp < (live.passedAt ?? -Infinity) ||
+            !inPose(s, match.pose.yaw, live)
+          ) {
+            s.hold = null;
+            s.status = 'quality_blocked';
+            continue;
+          }
+          const relative = match.pose.yaw - (live.neutralYaw ?? 0);
+          if (!s.hold || Math.abs(s.hold.yaw - relative) > 5)
+            s.hold = { yaw: relative, since: timestamp };
+          s.status = 'preparing_enrollment';
+          if (timestamp - s.hold.since < 300) continue;
+          const vector = vectors.find((v) => v.detectionId === face.detectionId)?.embedding;
+          if (!vector) continue;
+          if (!s.candidate) {
+            s.candidate = { embedding: [...vector], timestamp };
+            continue;
+          }
+          if (cosineSimilarity(vector, s.candidate.embedding) <= 0.85) {
+            s.error =
+              'Hold the same face steady for a consistent capture. Previous passed checks are retained.';
+            s.status = 'quality_blocked';
+            continue;
+          }
+          s.error = null;
+          try {
+            await capture(s, face, vector, frame, timestamp, match, token);
+          } catch (error) {
+            s.error = error.message;
+            s.status = 'quality_blocked';
+            s.candidate = null;
+          }
+          if (token !== generation) return;
+        }
+        display({ latencyMs: now() - timestamp });
+      } finally {
+        processing = false;
+      }
+    },
+    async saveSet(labels, trackId) {
+      const s = sessions.get(
+        trackId ??
+          [...sessions.values()].find((s) => ['review', 'set_save_failed'].includes(s.status))
+            ?.trackId,
+      );
+      if (!s || !['review', 'set_save_failed'].includes(s.status)) return;
+      if (!valid(s)) throw new Error('Enrollment changed. Discard and capture again.');
+      if (labels.length !== 3 || labels.some((l) => !l.trim() || l.trim().length > 60))
+        throw new Error('Each sample needs a label.');
+      s.captures.forEach((c, i) => (c.template.label = labels[i].trim()));
+      s.status = 'saving_set';
+      display();
+      try {
+        await repository.commit({
+          type: 'addSampleSet',
+          personId: s.person.id,
+          newPerson: s.newPerson,
+          manifest: s.manifest,
+          captures: s.captures.map((c) => ({ template: c.template, attempt: c.attempt })),
+          captureSetId: s.captureSetId,
+          expectedEnrollmentRevision: s.person.enrollmentRevision,
+          signal: s.controller.signal,
+        });
+        s.status = 'completed';
+        s.review = null;
+        s.captures = [];
+      } catch (error) {
+        s.status = 'set_save_failed';
+        s.error = error.message;
+      }
+      display();
+    },
+    discardSet(trackId) {
+      const s = sessions.get(trackId ?? [...sessions.values()].find((s) => s.review)?.trackId);
+      if (s) {
+        cancelSession(s, 'Sample set discarded.');
+        s.status = 'completed';
+        display();
+      }
+    },
+    async retry(trackId) {
+      const s = sessions.get(
+        trackId ??
+          [...sessions.values()].find((s) => s.result?.attemptId === state.result?.attemptId)
+            ?.trackId,
+      );
+      if (!s || s.status !== 'save_failed') return;
+      s.status = 'retrying';
+      display();
+      try {
+        const result = await workflow.retrySave(s.result.attemptId);
+        s.result = result;
+        s.status = result.persisted ? 'saved' : 'save_failed';
+        s.error = result.error ?? null;
+        display({ result });
+      } catch (error) {
+        s.status = 'save_failed';
+        s.error = error.message;
+        display();
+      }
+    },
+    discard(trackId) {
+      const s = sessions.get(
+        trackId ??
+          [...sessions.values()].find((s) => s.result?.attemptId === state.result?.attemptId)
+            ?.trackId,
+      );
+      if (s && !s.result?.persisted) {
+        workflow.discard(s.result?.attemptId);
+        cancelSession(s, 'Unsaved capture discarded.');
+      }
+      display({
+        result:
+          trackId === undefined || s?.result?.attemptId === state.result?.attemptId
+            ? null
+            : state.result,
+      });
+    },
+    cancelFace(trackId) {
+      const s = sessions.get(trackId);
+      if (s && !terminal(s.status)) {
+        cancelSession(s, 'Enrollment cancelled for this face.');
+        display();
+      }
+    },
+    enroll() {
+      return Promise.resolve();
+    },
+    stale() {
+      if (lastFrameAt !== null && now() - lastFrameAt > 1500 && faces.length) {
+        faces = [];
+        discovery.reset();
+        for (const s of sessions.values())
+          if (!terminal(s.status))
+            cancelSession(s, 'Camera analysis stopped. Confirm this face again.');
+        display();
+      }
+    },
+    fail(error) {
+      api.stop();
+      publish({ status: 'error', error: error.message });
+    },
+    stop() {
+      generation++;
+      for (const s of sessions.values()) {
+        s.controller.abort();
+        if (s.result && !s.result.persisted) workflow.discard(s.result.attemptId);
+      }
+      sessions.clear();
+      faces = [];
+      poses.clear();
+      discovery.reset();
+      tracker.reset();
+      lastFrameAt = null;
+      publish({
+        status: 'stopped',
+        faces: [],
+        sessions: [],
+        needsIndependentPose: false,
+        enrollmentPerson: null,
+        discovery: null,
+      });
+    },
+  };
+  return api;
+}

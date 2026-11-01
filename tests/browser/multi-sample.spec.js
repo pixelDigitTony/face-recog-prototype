@@ -73,7 +73,7 @@ test('multiple references, evaluation and tracking work on desktop and mobile', 
     };
   });
   await page.goto('/enroll');
-  await expect(page.getByRole('button', { name: 'Add person', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Start live scan', exact: true })).toBeEnabled();
   await page.evaluate(async () => {
     const key = Object.keys(localStorage).find((k) => k.startsWith('stk:face-prototype:'));
     const db = JSON.parse(localStorage.getItem(key)),
@@ -108,17 +108,18 @@ test('multiple references, evaluation and tracking work on desktop and mobile', 
     localStorage.setItem(key, JSON.stringify(db));
   });
   await page.reload();
-  await page.getByRole('combobox').click();
-  await page.getByRole('option', { name: 'E0 · Person 0' }).click();
+  await page.getByRole('button', { name: 'Start live scan', exact: true }).click();
   await expect(page.getByText('Person 0 · 5/5 face samples')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Start live scan', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Replace this sample', exact: true }).nth(1).click();
-  await expect(page.getByRole('button', { name: 'Start live scan', exact: true })).toBeEnabled();
+  await expect(
+    page.getByRole('button', { name: 'Replace this sample', exact: true }).last(),
+  ).toBeEnabled();
   await page.getByRole('button', { name: 'Use Add face sample', exact: true }).click();
   await page.getByRole('button', { name: 'Delete sample', exact: true }).last().click();
   await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
   await expect(page.getByText('Person 0 · 4/5 face samples')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Start live scan', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Add face sample', exact: true })).toBeEnabled();
   await page.goto('/evaluate');
   await page.getByLabel('Actual person').click();
   await page.getByRole('option', { name: 'Person 0 (E0)' }).click();
@@ -126,7 +127,7 @@ test('multiple references, evaluation and tracking work on desktop and mobile', 
   await page.getByRole('button', { name: 'Start trial', exact: true }).click();
   await expect(page.getByText('New webcam trial · 1/100 saved')).toBeVisible();
   await expect(page.getByText(/All samples: correct/)).toBeVisible();
-  await expect(page.getByText(/Primary only: missed/)).toBeVisible();
+  await expect(page.getByText(/Primary only:/)).toHaveCount(0);
   const table = page.getByRole('table', { name: 'Experimental threshold comparison' });
   await expect(table.getByRole('row')).toHaveCount(17);
   await page.screenshot({ path: '.local/multi-sample-evaluation-desktop.png', fullPage: true });

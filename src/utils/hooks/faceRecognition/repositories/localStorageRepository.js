@@ -1,13 +1,21 @@
+import { ENROLLMENT_POLICY, MULTI_ENROLLMENT_POLICY } from '../liveness/livenessPolicy';
 import {
   evaluateTrial,
   validateEvaluationTrial,
   compactEvaluationReport,
+  evaluateComparativeTrial,
 } from '../recognition/evaluation';
+import {
+  COMPARATIVE_POLICY,
+  resolveReferencePlan,
+  assertIndependentProbe,
+} from '../recognition/evaluationReferencePlan';
 import { createDatabase, validateDatabase, fail } from './databaseSchema';
 import { acquireWriterLock } from './writerLock';
 import { migrateDatabase } from './migrateDatabase';
 import { buildEnrollmentGallery } from '../recognition/enrollmentGallery';
 import { IDENTIFICATION_POLICY } from '../recognition/identificationPolicy';
+import { rankEmbedding } from '../recognition/identificationPolicy';
 
 export function createLocalStorageRepository({
   context,
@@ -109,10 +117,68 @@ export function createLocalStorageRepository({
         const db =
           raw === null ? createDatabase(context) : validateDatabase(JSON.parse(raw), context);
         const now = new Date().toISOString();
+        if (operation.newPerson) {
+          const draft = operation.newPerson;
+          // A name alone never creates a database row. Commit the new person and
+          // validated live capture together, or roll the entire write back.
+          const existing = db.people.find((p) => p.id === draft.id);
+          const retried =
+            (operation.attempt && db.attempts.some((a) => a.id === operation.attempt.id)) ||
+            (operation.captureSetId &&
+              db.templates.some((t) => t.captureSetId === operation.captureSetId));
+          if (!existing) {
+            if (
+              !['saveEnrollment', 'addSampleSet'].includes(operation.type) ||
+              !draft.acknowledgedAt ||
+              draft.enrollmentRevision !== 0 ||
+              !Number.isFinite(Date.parse(draft.acknowledgedAt)) ||
+              draft.companyId !== context.companyId ||
+              (draft.storeId ?? null) !== (context.storeId ?? null) ||
+              !draft.displayName?.trim() ||
+              draft.displayName.trim().length > 120 ||
+              (operation.type === 'saveEnrollment' &&
+                (operation.attempt?.personId !== draft.id ||
+                  operation.template?.personId !== draft.id ||
+                  operation.attempt?.outcome !== 'ENROLLED')) ||
+              (operation.type === 'addSampleSet' &&
+                (operation.personId !== draft.id ||
+                  operation.captures?.some(
+                    (c) => c.template.personId !== draft.id || c.attempt.personId !== draft.id,
+                  ))) ||
+              db.people.some(
+                (p) =>
+                  p.displayName.trim().toLowerCase() === draft.displayName.trim().toLowerCase(),
+              )
+            )
+              fail(
+                'This name already exists or the new enrollment is invalid. Match the existing face before adding a sample.',
+              );
+            const gallery = await buildEnrollmentGallery(db, operation.manifest, context);
+            const probes = operation.captures?.map((c) => c.template.embedding) ?? [
+              operation.template?.embedding,
+            ];
+            if (
+              probes.some(
+                (probe) =>
+                  !probe || (rankEmbedding(probe, gallery.entries)?.similarity ?? -1) >= 0.85,
+              )
+            )
+              fail(
+                'This face now matches an existing record. Restart matching before enrolling.',
+                'STALE_CONTEXT',
+              );
+            db.people.push(structuredClone(draft));
+          } else if (!retried)
+            fail('New enrollment identity changed. Start again.', 'STALE_CONTEXT');
+        }
         if (operation.attempt) {
           if (
             ['MATCH', 'ENROLLED'].includes(operation.attempt.outcome) &&
-            operation.attempt.decisionPolicyVersion !== 'live-85-strict-v1'
+            !(
+              operation.attempt.purpose === 'enroll'
+                ? [ENROLLMENT_POLICY, MULTI_ENROLLMENT_POLICY]
+                : ['live-85-strict-v1']
+            ).includes(operation.attempt.decisionPolicyVersion)
           )
             fail('New live results require current liveness and similarity policy.');
           const existing = db.attempts.find((a) => a.id === operation.attempt.id);
@@ -122,12 +188,7 @@ export function createLocalStorageRepository({
             return db;
           }
           const person = db.people.find((p) => p.id === operation.attempt.personId);
-          if (
-            !person ||
-            (operation.expectedEnrollmentRevision !== undefined
-              ? person.enrollmentRevision !== operation.expectedEnrollmentRevision
-              : person.primaryTemplateId !== operation.expectedTemplateId)
-          )
+          if (!person || person.enrollmentRevision !== operation.expectedEnrollmentRevision)
             fail('Enrollment changed. Discard this result and capture again.', 'STALE_CONTEXT');
         }
         switch (operation.type) {
@@ -196,20 +257,75 @@ export function createLocalStorageRepository({
               storeId: context.storeId ?? null,
               updatedAt: now,
             };
+            delete person.primaryTemplateId;
+            delete person.activeTemplateId;
             const prior = db.people.find((p) => p.id === person.id);
             if (prior)
               Object.assign(prior, person, {
-                primaryTemplateId: prior.primaryTemplateId,
                 enrollmentRevision: prior.enrollmentRevision,
                 createdAt: prior.createdAt,
               });
             else
               db.people.push({
                 ...person,
-                primaryTemplateId: null,
                 enrollmentRevision: 0,
                 createdAt: now,
               });
+            break;
+          }
+          case 'addSampleSet': {
+            const { captures, captureSetId, personId, expectedEnrollmentRevision } = operation;
+            if (!captureSetId || !Array.isArray(captures) || captures.length !== 3)
+              fail('Invalid guided sample set.');
+            const prior = db.templates.filter((t) => t.captureSetId === captureSetId);
+            if (prior.length) {
+              if (
+                prior.length !== 3 ||
+                captures.some(
+                  (c) => !prior.some((t) => JSON.stringify(t) === JSON.stringify(c.template)),
+                ) ||
+                captures.some(
+                  (c) => !db.attempts.some((a) => JSON.stringify(a) === JSON.stringify(c.attempt)),
+                )
+              )
+                fail('Capture set ID conflicts.');
+              return db;
+            }
+            const person = db.people.find((p) => p.id === personId);
+            if (!person || person.enrollmentRevision !== expectedEnrollmentRevision)
+              fail('Enrollment changed. Capture again.', 'STALE_CONTEXT');
+            if (db.templates.filter((t) => t.personId === personId).length + 3 > 5)
+              fail('Three free sample slots are required.', 'CAPACITY_ERROR');
+            for (const [index, { template, attempt }] of captures.entries()) {
+              if (
+                !person.acknowledgedAt ||
+                template.version !== expectedEnrollmentRevision + index + 1 ||
+                attempt.templateVersion !== template.version ||
+                attempt.capturePose !== ['front', 'slight_left', 'slight_right'][index] ||
+                attempt.sessionId !== captures[0].attempt.sessionId ||
+                attempt.trackId !== captures[0].attempt.trackId ||
+                (index > 0 &&
+                  attempt.decisionTimestamp <= captures[index - 1].attempt.decisionTimestamp) ||
+                template.enrollmentSource !== 'live_camera' ||
+                template.enrollmentLiveness !== attempt.livenessStatus ||
+                JSON.stringify(template.liveness) !== JSON.stringify(attempt.liveness) ||
+                template.personId !== personId ||
+                attempt.personId !== personId ||
+                template.captureSetId !== captureSetId ||
+                attempt.captureSetId !== captureSetId ||
+                attempt.templateId !== template.id ||
+                attempt.outcome !== 'ENROLLED' ||
+                ![ENROLLMENT_POLICY, MULTI_ENROLLMENT_POLICY].includes(
+                  attempt.decisionPolicyVersion,
+                ) ||
+                attempt.decisionPolicyVersion !== captures[0].attempt.decisionPolicyVersion
+              )
+                fail('Invalid guided capture evidence.');
+              db.templates.push(template);
+              db.attempts.push(attempt);
+            }
+            person.enrollmentRevision += 3;
+            person.updatedAt = now;
             break;
           }
           case 'saveEnrollment': {
@@ -228,18 +344,12 @@ export function createLocalStorageRepository({
             operation.template.version = person.enrollmentRevision + 1;
             operation.attempt.templateVersion = operation.template.version;
             db.templates.push(operation.template);
-            if (
-              !person.primaryTemplateId ||
-              person.primaryTemplateId === operation.replaceTemplateId
-            )
-              person.primaryTemplateId = operation.template.id;
             person.enrollmentRevision++;
             person.updatedAt = now;
             db.attempts.push(operation.attempt);
             break;
           }
           case 'deleteSample':
-          case 'setPrimarySample':
           case 'renameSample': {
             const sample = db.templates.find(
               (t) => t.id === operation.templateId && t.personId === operation.personId,
@@ -253,18 +363,7 @@ export function createLocalStorageRepository({
               fail('Sample changed. Refresh and try again.', 'STALE_CONTEXT');
             if (operation.type === 'renameSample') sample.label = operation.label.trim();
             else {
-              if (operation.type === 'deleteSample') {
-                db.templates = db.templates.filter((t) => t.id !== sample.id);
-                if (person.primaryTemplateId === sample.id)
-                  person.primaryTemplateId =
-                    db.templates
-                      .filter((t) => t.personId === person.id)
-                      .sort(
-                        (a, b) =>
-                          (a.createdAt || '').localeCompare(b.createdAt || '') ||
-                          a.id.localeCompare(b.id),
-                      )[0]?.id ?? null;
-              } else person.primaryTemplateId = sample.id;
+              db.templates = db.templates.filter((t) => t.id !== sample.id);
               person.enrollmentRevision++;
             }
             person.updatedAt = now;
@@ -278,18 +377,31 @@ export function createLocalStorageRepository({
               return db;
             }
             const gallery = await buildEnrollmentGallery(db, operation.manifest, context);
-            if (gallery.version !== operation.trial.galleryVersion)
+            const comparative = operation.trial.policy === COMPARATIVE_POLICY;
+            if (!comparative && gallery.version !== operation.trial.galleryVersion)
               fail('Gallery changed. Capture again.', 'STALE_CONTEXT');
+            if (!comparative && operation.trial.policy !== 'evaluation-all-samples-v2')
+              fail('New evaluations require current policy.');
             validateEvaluationTrial(operation.trial, db, context);
-            operation.trial.report = compactEvaluationReport(
-              evaluateTrial(operation.trial, gallery, operation.manifest),
-            );
+            if (comparative) {
+              const subsets = await resolveReferencePlan(
+                operation.trial.referencePlan,
+                gallery,
+                operation.manifest,
+                context,
+              );
+              assertIndependentProbe(operation.trial, db);
+              operation.trial.report = evaluateComparativeTrial(operation.trial, subsets);
+            } else
+              operation.trial.report = compactEvaluationReport(
+                evaluateTrial(operation.trial, gallery, operation.manifest),
+              );
             db.evaluationTrials.push(operation.trial);
             break;
           }
           case 'rerunEvaluations': {
             const gallery = await buildEnrollmentGallery(db, operation.manifest, context);
-            for (const trial of db.evaluationTrials)
+            for (const trial of db.evaluationTrials.filter((t) => t.policy !== COMPARATIVE_POLICY))
               trial.report = compactEvaluationReport(
                 evaluateTrial(trial, gallery, operation.manifest),
               );
@@ -326,6 +438,9 @@ export function createLocalStorageRepository({
               ...db.settings,
               matchThreshold: operation.settings.matchThreshold,
               saveThumbnails: operation.settings.saveThumbnails,
+              enrollmentLiveness: structuredClone(
+                operation.settings.enrollmentLiveness ?? db.settings.enrollmentLiveness,
+              ),
             };
             break;
           default:

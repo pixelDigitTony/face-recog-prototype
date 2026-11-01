@@ -87,7 +87,11 @@ describe('localStorage repository', () => {
     const before = h.values.get(h.repository.key);
     h.options.quota = true;
     await expect(
-      h.repository.commit({ type: 'saveAttempt', expectedTemplateId: null, attempt: attempt() }),
+      h.repository.commit({
+        type: 'saveAttempt',
+        expectedEnrollmentRevision: 0,
+        attempt: attempt(),
+      }),
     ).rejects.toThrow('Full');
     expect(h.values.get(h.repository.key)).toBe(before);
     expect(h.repository.getSnapshot().database.attempts).toHaveLength(0);
@@ -96,7 +100,7 @@ describe('localStorage repository', () => {
     const h = harness();
     await h.repository.load();
     await h.repository.commit({ type: 'savePerson', person: person() });
-    const operation = { type: 'saveAttempt', expectedTemplateId: null, attempt: attempt() };
+    const operation = { type: 'saveAttempt', expectedEnrollmentRevision: 0, attempt: attempt() };
     await h.repository.commit(operation);
     await h.repository.commit(operation);
     expect(h.repository.getSnapshot().database.attempts).toHaveLength(1);
@@ -163,7 +167,7 @@ describe('localStorage repository', () => {
     await h.repository.commit({
       type: 'saveAttempt',
       attempt: attempt(),
-      expectedTemplateId: null,
+      expectedEnrollmentRevision: 0,
     });
     await h.repository.commit({
       type: 'settings',
@@ -184,7 +188,7 @@ describe('localStorage repository', () => {
     await h.repository.commit({
       type: 'saveAttempt',
       attempt: attempt(),
-      expectedTemplateId: null,
+      expectedEnrollmentRevision: 0,
     });
     await h.repository.commit({ type: 'deletePerson', id: 'p1' });
     expect(h.repository.getSnapshot().database.attempts).toHaveLength(0);

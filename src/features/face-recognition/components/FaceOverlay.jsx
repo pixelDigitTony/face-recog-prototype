@@ -40,6 +40,7 @@ function FaceLabel({
   const left =
     labelLeft ?? Math.max(8, Math.min(box.left + (box.width - width) / 2, size[0] - width - 8));
   const top = Math.max(8, Math.min(box.top - height - 14, size[1] - height - 16));
+  const faceSimilarity = face.identification ? face.identification.similarity : similarity;
   return (
     <Box
       ref={ref}
@@ -64,6 +65,11 @@ function FaceLabel({
     >
       {showInstructions && (
         <Box sx={{ mb: 0.75 }}>
+          {face.enrollment?.person && (
+            <Box sx={{ fontSize: 12, fontWeight: 700 }}>
+              Enrolling {face.enrollment.person.displayName}
+            </Box>
+          )}
           <LivenessPrompt compact liveness={liveness} status={status} actionLabel={actionLabel} />
         </Box>
       )}
@@ -72,11 +78,11 @@ function FaceLabel({
           <ClosestRecord identification={face.identification} compact={width < 160} />
         )}
         Face #{face.trackId} · Detection {(face.confidence * 100).toFixed(1)}%
-        {similarity !== null && similarity !== undefined && (
+        {faceSimilarity !== null && faceSimilarity !== undefined && (
           <>
             <br />
             {face.identification?.tracked ? 'Confirmed similarity: ' : 'Similarity: '}
-            {formatPercentage(similarity)}
+            {formatPercentage(faceSimilarity)}
           </>
         )}
       </Box>
@@ -156,9 +162,9 @@ export function FaceOverlay({
                 size={size}
                 maxLabelWidth={columns ? Math.max(0, slotWidth - 8) : size[0] - 16}
                 labelLeft={columns ? 12 + slot * slotWidth : undefined}
-                showInstructions={showInstructions}
-                liveness={liveness}
-                status={faces.length > 1 ? 'multiple_faces' : status}
+                showInstructions={face.enrollment ? face.enrollment.active : showInstructions}
+                liveness={face.enrollment?.liveness ?? liveness}
+                status={face.enrollment?.status ?? (faces.length > 1 ? 'multiple_faces' : status)}
                 actionLabel={actionLabel}
                 similarity={
                   face.identification

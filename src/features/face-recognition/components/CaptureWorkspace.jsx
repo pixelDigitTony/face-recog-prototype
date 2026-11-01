@@ -37,7 +37,10 @@ export function CaptureWorkspace({ purpose }) {
   const imageRef = useRef(null),
     mode = purpose === 'enroll' ? 'enroll' : 'verify',
     isEnrollment = mode === 'enroll';
-  const people = state.database?.people.filter((p) => isEnrollment || p.primaryTemplateId) ?? [];
+  const people =
+    state.database?.people.filter(
+      (p) => isEnrollment || state.database.templates.some((t) => t.personId === p.id),
+    ) ?? [];
   const person = people.find((p) => p.id === selectedId) ?? null;
   const disabled = state.mode !== 'writable' || workflow.busy;
   useEffect(
@@ -190,12 +193,12 @@ export function CaptureWorkspace({ purpose }) {
               {workflow.busy
                 ? 'Processing…'
                 : isEnrollment
-                  ? person?.primaryTemplateId
+                  ? state.database.templates.some((t) => t.personId === person?.id)
                     ? 'Add diagnostic sample'
                     : 'Capture & enroll'
                   : 'Scan face'}
             </Button>
-            {person?.primaryTemplateId && isEnrollment && (
+            {state.database.templates.some((t) => t.personId === person?.id) && isEnrollment && (
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
                 Adds a diagnostic-only sample, preserving previous samples. Five samples maximum.
               </Typography>

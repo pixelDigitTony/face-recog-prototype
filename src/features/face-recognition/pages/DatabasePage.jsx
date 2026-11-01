@@ -51,17 +51,17 @@ export function DatabasePage() {
           { key: 'displayName', label: 'Name' },
           { key: 'department', label: 'Department' },
           {
-            key: 'primaryTemplateId',
+            key: 'enrollmentRevision',
             label: 'Enrollment',
             render: (row) => (
               <Chip
                 size="small"
                 label={
-                  row.primaryTemplateId
+                  db.templates.some((t) => t.personId === row.id)
                     ? `${db.templates.filter((t) => t.personId === row.id).length} samples`
                     : 'Not enrolled'
                 }
-                color={row.primaryTemplateId ? 'success' : 'default'}
+                color={db.templates.some((t) => t.personId === row.id) ? 'success' : 'default'}
                 variant="outlined"
               />
             ),

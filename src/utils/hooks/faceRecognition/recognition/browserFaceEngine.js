@@ -79,6 +79,7 @@ export function createBrowserFaceEngine(baseUrl) {
       return call('analyzeFrame', {
         frame,
         includeEmbedding: options.includeEmbedding,
+        analyzeAllFaces: options.analyzeAllFaces === true,
         saveThumbnails: false,
       });
     },

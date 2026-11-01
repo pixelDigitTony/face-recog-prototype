@@ -1,5 +1,7 @@
 # Anthony's Face Lab: Multiple Samples and Recognition Evaluation
 
+Current amendment: [Equal samples, configurable liveness and guided enrollment](ANTHONYS_FACE_LAB_SAMPLE_MATCHING_AND_CONFIGURABLE_LIVENESS_SPEC.md) supersedes primary-sample selection, schema-4 storage and paired evaluation for new results. Historical policies retain their recorded meaning.
+
 Status: **Implemented locally; see IMPLEMENTATION.md for validation and outstanding physical-camera acceptance.**  
 Date: 2026-10-30 (Asia/Manila).  
 Project: `C:\Users\USER\projects\Starwinner\face-recog-prototype`.

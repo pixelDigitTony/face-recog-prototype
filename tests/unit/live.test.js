@@ -153,7 +153,7 @@ describe('tracking and migration', () => {
     });
     const before = JSON.stringify(old);
     const next = migrateDatabase(old, scope);
-    expect(next.schemaVersion).toBe(4);
+    expect(next.schemaVersion).toBe(5);
     expect(next.settings.matchThreshold).toBe(0.85);
     expect(next.attempts[0]).toMatchObject({
       outcome: 'MATCH',
@@ -483,7 +483,7 @@ describe('live session orchestration', () => {
     await turned.live.enroll();
     await turned.step(15);
     expect(turned.live.getSnapshot().status).toBe('ready_to_enroll');
-    expect(turned.live.getSnapshot().error).toMatch(/Look straight ahead/);
+    expect(turned.live.getSnapshot().error).toMatch(/Face forward for capture/);
     expect(turned.repo.getSnapshot().database.attempts).toHaveLength(0);
     for (let i = 0; i < 60; i++) await turned.step(15);
     expect(turned.live.getSnapshot().liveness.challengeId).toBe(completed.challengeId);
@@ -553,6 +553,7 @@ describe('live session orchestration', () => {
     }
     const legacy = structuredClone(original),
       attempt = legacy.attempts.at(-1);
+    attempt.decisionPolicyVersion = 'live-85-strict-v1';
     attempt.liveness.policyVersion = 'head-turn-v1';
     attempt.liveness.expiresAt = attempt.liveness.passedAt + 5000;
     attempt.decisionTimestamp = attempt.liveness.passedAt + 100;

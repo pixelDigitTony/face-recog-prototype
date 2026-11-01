@@ -1,3 +1,79 @@
+# Multiple enrollment capture — 2026-11-01
+
+Enroll now allows several visible people to confirm their names with Enter and complete capture independently. Each tracked face has its own immutable liveness configuration, passed challenge steps, capture consistency checks, optional three-sample review and save/retry state. A person leaving, one failed save or one sealed review does not interrupt anyone else. Existing matched people still require explicit Add/Replace sample actions. Names remain session drafts until their validated captures save atomically; no empty person rows are inserted.
+
+The new multi-enrollment coordinator shares the existing bounded YuNet/SFace processing and a MediaPipe worker configured for up to ten faces. Pose and optional blink observations are associated to individual tracks by exclusive overlap, never model result order. Ambiguous associations cancel only affected unsealed drafts. Per-face guided reviews can be saved while the camera and other people continue; Stop cancels all unsaved sessions. Retry/Discard controls target their own capture, including when another face's result was saved later.
+
+Automatic captures use `enrollment-per-face-liveness-v2`, preserving the actual scene face count separately from the single enrollment target. Repository validation checks track/detection bindings, pose/capture timestamps, exclusive bounding-box overlap, challenge provenance and capture consistency. Historical single-face policies retain their original validation. Schema 5, existing enrollments, storage limits, Scan matching and atomic per-person writes remain intact.
+
+Verification: **201 unit tests passed** across 13 files and **32 Chrome browser tests passed** on the final development source (2.5 minutes). New cases cover simultaneous desktop/mobile enrollments, independent turns/blinks, per-face disappearance, guided review while another person saves, sealed offscreen review, quota failure/retry and truthful policy metadata. A real MediaPipe worker fixture returns separate pose and eye-blink outputs for two faces; the existing real YuNet/SFace and storage-recovery regressions also pass. Reviewed `.local/parallel-enrollment-{desktop,mobile}.png`. Production build, formatting, whitespace and all **14 PlantUML diagrams passed**. Main JavaScript is about 767 kB / 236 kB gzip; the existing nonfatal bundle-size advisory remains.
+
+Physical-camera usability, throughput with a group, crossing faces, lighting and replay resistance still require acceptance on target devices. The ten-session configuration cap is not a measured performance guarantee. No deployment is included.
+
+---
+
+# Independent analysis for multiple faces on Enroll — 2026-11-01
+
+Fixed Enroll discovery clearing recognition whenever a second person appeared. The worker now returns an embedding for each analyzed detection, keyed by that frame's detection ID. It processes at most two valid crops per comparison in rotation. The coordinator maps those results to tracked faces instead of sharing a single embedding or percentage across the feed.
+
+Each visible track owns its stability window, candidate/reference thumbnail, similarity, freshness and confirmation. The camera label, Current match similarity panel and accessible detected-faces list show that face's own results. One poor-quality or unknown face does not block other identities from matching. Disappeared, uncertain or stale results are cleared independently. Duplicate identity claims remain amber; an already confirmed original track retains ownership when a new conflicting face appears. Matching continues for multiple faces, while name confirmation and enrollment capture still require one person in view.
+
+Corrected the analysis cadence to account for multi-face embedding batches, avoiding comparisons so frequent that three observations never span the required 600 ms. Kept the 85% boundary, margin, uniqueness and confirmation policies, localStorage schema and enrollment challenge behavior.
+
+Verification: **191 unit tests passed** across 12 files. All **27 Chrome browser tests passed** on the final development source (2.1 minutes), including independent desktop/mobile face scores and the real multi-face extraction parity check. The real worker's new per-face extraction agrees with the existing retained-frame extraction path on the exact same scene; tests do not assume that changing detection context preserves an 85% similarity to a different reference image. Desktop/mobile screenshots were reviewed in `.local/enrollment-per-face-{desktop,mobile}.png`. Production build passed (main JavaScript about 750 kB / 232 kB gzip; existing nonfatal bundle advisory remains). Formatting, whitespace and the updated UML checks passed.
+
+Physical-camera performance with several people, varying lighting and moving/crossing faces remains to be verified. No deployment is included.
+
+---
+
+# Face-first automatic enrollment — 2026-11-01
+
+Enroll now starts with camera matching and has no person selector, Add person dialog, or diagnostic-image choice. A stable unknown single face exposes **Detected person's name** inside **Current match similarity**. Enter confirms the name and the displayed browser-local storage acknowledgment, then automatically begins configured liveness and fresh capture. Employee codes are generated internally. Matching uses all eligible references, a >=0.85 boundary, distinct-person uniqueness/margin and the existing three-observation stability policy. Ambiguous candidates never become new enrollees automatically.
+
+The name is a session draft. `saveEnrollment` or `addSampleSet` commits a new person and its validated capture records atomically, under the existing writer lock, schema-5 validation and capacity limits. The repository checks draft/capture identity bindings and checks again for existing face matches before inserting a new person. Typing, failed liveness, cancellation, face loss/uncertainty and failed writes leave no empty person. Failed writes retain the exact pending capture for retry. Duplicate names are reported rather than silently merging records.
+
+Existing recognized faces show their record and sample-management actions; add/replace remains explicit. Successful single capture resumes discovery for the next face, while confirmed discoveries skip repeated embedding comparisons until disappearance or gallery changes. Multiple people block name entry; name confirmation remains bound to a fresh tracked face. Same-face challenge progress and settings snapshots remain intact. Guided mode automatically captures ready poses, stops for review and keeps the explicit atomic Save three samples action.
+
+Diagnostic image enrollment and comparison are available in Settings. Scan, local data isolation, evaluation and live recognition thresholds remain unchanged. The interface contracts, README and UML document the new flow. Existing uncommitted work is preserved; no deployment or production application changes are included.
+
+Verification: **182 unit tests passed**. All **25 Chrome browser tests passed** on the final development source (1.9 minutes), including desktop/mobile name entry, existing-record reuse, automatic guided capture, optional blink, real YuNet/SFace enrollment-to-scan, missing liveness assets, multi-face boxes, evaluation, diagnostics and storage recovery. The production build passed (main JavaScript approximately 748 kB / 231 kB gzip; the existing nonfatal Vite bundle advisory remains). Formatting, Git whitespace checks and all **13 PlantUML diagrams** passed. Desktop/mobile screenshots of the name field in the match panel were inspected in `.local/automatic-enrollment-{desktop,mobile}.png`.
+
+Physical-camera usability and accuracy remain to be checked. Real-model fixtures and simulated challenge observations validate the code paths, not operational recognition accuracy or replay resistance.
+
+---
+
+# Curated reference comparison implementation — 2026-10-31
+
+Implemented [curated samples and comparative evaluation](ANTHONYS_FACE_LAB_CURATED_SAMPLES_AND_COMPARATIVE_EVALUATION_SPEC.md) locally. Enroll now recommends a clear frontal baseline and a few useful everyday variations, displays recorded lighting/capture-set evidence, and retains existing capture gates. Missing evidence is labeled Not recorded.
+
+Evaluate keeps all-samples evaluation and adds an explicit comparison mode. Operators freeze an ordered cohort/reference plan before fresh captures. Exact nested 1/3/5 subsets use identical people and the same three probe observations; model, scope, eligible content and sample versions are bound by SHA-256 fingerprints. Every person needs three samples for 1/3 and five for 1/3/5. Evaluation baseline selection never changes live Scan or introduces a primary reference.
+
+New trials record operator-supplied lighting, appearance, pose, session and independent-capture acknowledgment. Negative trials require an explicit scope-wide non-enrollment acknowledgment. Known ground truth must belong to the cohort. Shared enrollment provenance and identical enrollment probe vectors are rejected where available; the acknowledgment remains necessary because automated checks cannot prove independent capture.
+
+Reports separate correct/missed/wrong-person and unknown acceptance/rejection, show exact supporting references, paired transitions, per-person outcomes, counts/denominators and correlated-session limits. Filters operate on the same trial set for every mode. Selected reference changes make results historical and exclude them from current aggregates. Historical reports retain recorded evidence; ordinary all-samples reruns skip comparative trials. Renames and unused additions preserve unchanged selected references.
+
+Schema 5 and storage limits remain. The new additive policy is `evaluation-curated-counts-v3` (protocol 1), independently validated at the repository boundary. Writes retain the writer lock, whole-database validation, quota preservation and idempotent trial IDs. Failed saves retain pending results for retry/discard/export. Comparison exports omit probe vectors; full database export still contains biometric data. No recognition model, live matching policy, enrollment challenge or deployment changed.
+
+Verification: **170 unit tests passed** across 10 files and **22 Chrome browser tests passed** on development source (including the three new desktop/mobile/historical-reference cases). The suite also passed existing real YuNet/SFace, local MediaPipe, offline/native agreement, enrollment progress, storage recovery and multi-person tracking checks. Screenshots for the new flow were inspected at `.local/comparative-evaluation-{desktop,mobile}.png`. Formatting and all **12 PlantUML diagrams** passed. The three new comparison browser cases also passed again on the final revision after export exclusion metadata was added. The final production build passed (main JavaScript about 741 kB / 229 kB gzip); the existing nonfatal Vite large-chunk advisory remains.
+
+Physical-camera accuracy across days, makeup/glasses and lighting remains untested in this run. Browser fixtures prove workflow behavior, not that multiple references improve recognition or that challenges resist replay. No commit, push or deployment is included.
+
+---
+
+# Configurable enrollment implementation — 2026-10-30
+
+Implemented the equal-sample/configurable-liveness specification locally. Schema 5 migrates schemas 1–4 under the existing key/lock, removes primary pointers, and preserves existing records and historical decision policies. New evaluation reports use `evaluation-all-samples-v2`; historical paired reports remain readable and require an explicit rerun for current aggregates.
+
+Enroll offers independent left/right/blink settings (turns on, blink off by default), immutable session snapshots and explicit all-disabled `not_checked` evidence. The existing MediaPipe worker now optionally emits eye-blink scores; a separate bounded scheduler targets 20 Hz when needed, while old completed steps and stable enrollment readiness remain intact. New captures use `enrollment-configurable-liveness-v1` and `configurable-challenge-v1` evidence. Scan retains `identify-85-multisample-v3`, exact winning-reference presentation and confirm-once tracking.
+
+Guided mode requires three slots and collects front/slight-left/slight-right captures with per-pose consistency. Three templates and three attempt records are sealed for review and saved atomically with a capture-set ID, revision guard and storage checks. Camera processing stops at review; retry requires no further inference. Existing samples remain intact on cancellation or failure.
+
+Final local validation: **151 unit tests passed**. The final production preview passed **14 Chrome browser tests** (51.0 s), including desktop/mobile guided capture and blink-only enrollment; five development-only cases were skipped there and all **five passed separately on the final development source** (32.1 s). These cover real YuNet/SFace fixtures, local MediaPipe loading and WASM/native agreement. Mocked camera/pose tests verify disabled provenance, challenge retention, independent blink observations and atomic review saving; they do not establish physical-camera accuracy.
+
+Production build, full Prettier check, Git whitespace check and all **11 PlantUML diagrams** passed. The existing nonfatal bundle-size warning remains (main JS about 715 kB / 222 kB gzip). Reviewed desktop/mobile guided-review screenshots in `.local/configurable-enrollment-{desktop,mobile}.png`; no stale face boxes remain after camera shutdown. Tests also cover all eight switch combinations, invalid blink cycles, schema-4 migration, stale revisions, malformed guided evidence, idempotent set retries, quota failure and current-pose hold recovery. Physical-camera blink usability, lighting/appearance accuracy and replay resistance require separate acceptance; deployment is not performed.
+
+---
+
 # Implementation and validation record
 
 ## Multiple appearance samples and evaluation — 2026-10-30
