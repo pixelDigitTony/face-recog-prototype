@@ -1,3 +1,5 @@
+import { LIVENESS_METER_POLICY } from './livenessMeterPolicy';
+import { validateLivenessMeter } from './validateLivenessMeter';
 import { boxIoU } from '../recognition/faceTracker';
 export const ENROLLMENT_POLICY = 'enrollment-configurable-liveness-v1';
 export const MULTI_ENROLLMENT_POLICY = 'enrollment-per-face-liveness-v2';
@@ -47,7 +49,8 @@ export function validateEnrollmentEvidence(attempt) {
     throw new Error('Invalid configurable enrollment policy.');
   if (attempt.outcome !== 'ENROLLED') return;
   const live = attempt.liveness;
-  const multiple = attempt.decisionPolicyVersion === MULTI_ENROLLMENT_POLICY;
+  const meterPolicy = attempt.decisionPolicyVersion === LIVENESS_METER_POLICY.enrollmentPolicy;
+  const multiple = meterPolicy || attempt.decisionPolicyVersion === MULTI_ENROLLMENT_POLICY;
   if (
     multiple &&
     (live?.method !== 'per_face_enrollment' ||
@@ -97,6 +100,21 @@ export function validateEnrollmentEvidence(attempt) {
     attempt.captureConsistency > 1.00001
   )
     throw new Error('Enrollment liveness evidence is incomplete.');
+  if (meterPolicy) {
+    if (livenessDisabled(config))
+      throw new Error('Enable at least one enrollment challenge in Settings');
+    validateLivenessMeter(attempt.livenessMeter, {
+      sessionId: attempt.sessionId,
+      cameraSessionId: attempt.cameraSessionId,
+      trackId: attempt.trackId,
+      workerGeneration: attempt.workerGeneration,
+      assetIdentity: live.assetIdentity,
+      captureTimestamp: attempt.captureFrameTimestamp,
+      poseTimestamp: attempt.poseTimestamp,
+      decisionTimestamp: attempt.decisionTimestamp,
+      exclusive: attempt.associationAmbiguous === false,
+    });
+  }
   if (livenessDisabled(config)) {
     if (
       attempt.livenessStatus !== 'not_checked' ||

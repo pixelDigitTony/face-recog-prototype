@@ -67,6 +67,10 @@ export function SettingsPage() {
                   const data = new FormData(event.currentTarget);
                   setError(null);
                   setSuccess(false);
+                  if (!data.has('turnLeft') && !data.has('turnRight') && !data.has('blink')) {
+                    setError('Enable at least one enrollment challenge in Settings.');
+                    return;
+                  }
                   try {
                     await repository.commit({
                       type: 'settings',
@@ -126,9 +130,13 @@ export function SettingsPage() {
                     />
                   ))}
                   <Typography variant="caption">
-                    When all tests are off: Not checked — disabled in Settings. Face quality and
-                    capture checks still apply. Blink detection needs a clear, responsive camera
-                    feed.
+                    Liveness evidence meter required for live enrollment. Live movement combines
+                    face or blink movement (up to 50) and head movement (up to 50). It resets after
+                    15 seconds without movement. A completed enrollment check remains ready and its
+                    recorded evidence stays unchanged. These are basic motion checks, not a
+                    probability of being alive; replay resistance is not validated. Prompted Blink
+                    can be disabled while passive blink remains active. Enable at least one prompted
+                    challenge for live enrollment.
                   </Typography>
                   {error && <Alert severity="error">{error}</Alert>}
                   {success && <Alert severity="success">Settings saved.</Alert>}
@@ -165,8 +173,8 @@ export function SettingsPage() {
               <StorageUsage state={state} />
               <Typography variant="body2" color="text.secondary" sx={{ my: 2 }}>
                 Up to 50 people, five samples per person, 200 combined captures and identification
-                scans, and 100 evaluation trials, within a 3 MB estimated storage budget. Records
-                are never automatically removed.
+                scans, 100 recognition evaluation trials and 100 physical trials, within a 3 MB
+                estimated storage budget. Records are never automatically removed.
               </Typography>
               <Button
                 color="error"

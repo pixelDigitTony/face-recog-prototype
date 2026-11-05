@@ -1,3 +1,5 @@
+import { createLivenessMeter } from '../liveness/livenessMeter';
+import { associateFacePoses } from '../liveness/associateFacePoses';
 import { buildEnrollmentGallery } from '../recognition/enrollmentGallery';
 import {
   createIdentificationWindow,
@@ -10,6 +12,8 @@ import { percentage, SCORE_MAPPING } from '../recognition/matchPolicy';
 export function createLiveIdentificationWorkflow({
   repository,
   engine,
+  liveness,
+  meterFactory = createLivenessMeter,
   context,
   now = () => performance.now(),
 }) {
@@ -26,7 +30,13 @@ export function createLiveIdentificationWorkflow({
     processing = false,
     pipelineAt,
     completedAt,
-    embeddingTimes = [];
+    embeddingTimes = [],
+    meterAvailable = false,
+    meterInitializing = false,
+    poseBusy = false,
+    poseSequence = 0,
+    meterGeneration = 0,
+    clockOffset = 0;
   const publish = (patch) => {
     state = { ...state, ...patch };
     listeners.forEach((fn) => fn());
@@ -68,6 +78,17 @@ export function createLiveIdentificationWorkflow({
       const t = tracks.get(face.trackId);
       return {
         ...face,
+        meter: t?.meter
+          ? (() => {
+              const value = t.meter.snapshot();
+              return {
+                ...value,
+                acceptedAt: value.accepted
+                  ? new Date(clockOffset + value.accepted.passedAt).toISOString()
+                  : null,
+              };
+            })()
+          : { status: meterAvailable || meterInitializing ? 'initializing' : 'unavailable' },
         identification: {
           status: t?.status ?? 'searching',
           person: t?.person ?? null,
@@ -229,14 +250,43 @@ export function createLiveIdentificationWorkflow({
       sessionId = crypto.randomUUID();
       tracker.reset();
       tracks.clear();
+      poseSequence = 0;
+      clockOffset = Date.now() - now();
+      meterAvailable = false;
       cooldown.clear();
       database = gallery = null;
-      embeddingTimes = [];
+      ((embeddingTimes = []), (meterAvailable = false), (poseBusy = false), (poseSequence = 0));
       completedAt = null;
       publish({ status: 'loading', faces: [], error: null, recent: [], gallery: null });
       await repository.load();
       await engine.initialize();
       if (token !== generation) return;
+      meterInitializing = Boolean(liveness);
+      if (liveness) {
+        liveness
+          .initialize({ blink: true, meter: true, numFaces: 10 })
+          .then(() => {
+            if (token !== generation) return;
+            meterInitializing = false;
+            meterGeneration = liveness.generation ?? generation;
+            meterAvailable = true;
+            for (const [id, track] of tracks)
+              track.meter = meterFactory({
+                cameraSessionId: sessionId,
+                trackId: id,
+                workerGeneration: meterGeneration,
+                assetIdentity: liveness.manifest?.sha256,
+              });
+            publish({ faces: display() });
+          })
+          .catch(() => {
+            if (token === generation) {
+              meterInitializing = false;
+              meterAvailable = false;
+              publish({ faces: display() });
+            }
+          });
+      }
       await refreshGallery(token);
       if (token === generation)
         publish({ status: gallery.entries.length ? 'scanning' : 'gallery_empty' });
@@ -260,12 +310,24 @@ export function createLiveIdentificationWorkflow({
         }
         const current = tracker.update(detected.faces, timestamp).faces;
         const visibleIds = new Set(current.map((f) => f.trackId));
-        for (const [id, t] of tracks) if (!visibleIds.has(id)) clearTrack(t);
+        for (const [id, t] of tracks)
+          if (!visibleIds.has(id)) {
+            t.meter?.reset();
+            clearTrack(t);
+          }
         for (const [id, t] of tracks) if (timestamp - t.seenAt > 1500) tracks.delete(id);
         for (const face of current) {
           let t = tracks.get(face.trackId);
           if (!t) {
             t = {
+              meter: meterAvailable
+                ? meterFactory({
+                    cameraSessionId: sessionId,
+                    trackId: face.trackId,
+                    workerGeneration: meterGeneration,
+                    assetIdentity: liveness?.manifest?.sha256,
+                  })
+                : null,
               window: createIdentificationWindow(),
               encounterId: crypto.randomUUID(),
               startedAt: new Date().toISOString(),
@@ -278,6 +340,7 @@ export function createLiveIdentificationWorkflow({
           }
           t.seenAt = timestamp;
           if (face.ambiguous) {
+            t.meter?.reset();
             clearTrack(t);
           } else if (t.confirmedAt != null) {
             // Continue detection/geometry tracking, but never rerun SFace for
@@ -442,15 +505,78 @@ export function createLiveIdentificationWorkflow({
         }
       }
     },
+    async observePose(frame, timestamp) {
+      if (!meterAvailable || poseBusy || !state.faces.length) return;
+      if (liveness.generation != null && liveness.generation !== meterGeneration) {
+        meterAvailable = false;
+        for (const t of tracks.values()) t.meter = null;
+        publish({ faces: display() });
+        return;
+      }
+      poseBusy = true;
+      const token = generation;
+      try {
+        const result = await liveness.observe(frame, timestamp);
+        if (token !== generation) return;
+        if (liveness.generation != null && liveness.generation !== meterGeneration) {
+          meterAvailable = false;
+          for (const t of tracks.values()) t.meter = null;
+          publish({ faces: display() });
+          return;
+        }
+        const observations = result.faces ?? [];
+        const matches = associateFacePoses(
+          state.faces,
+          observations.map((p) => ({ ...p, timestamp })),
+        );
+        poseSequence++;
+        for (const face of state.faces) {
+          const meter = tracks.get(face.trackId)?.meter,
+            match = matches.get(face.trackId);
+          if (!meter) continue;
+          if (!match || face.ambiguous || face.reasonCode || now() - timestamp > 1500) {
+            if (!face.reasonCode && observations.length && !match) meter.reset();
+            else meter.pause();
+          } else
+            meter.update({
+              ...match.pose,
+              sequence: poseSequence,
+              sourceTrackId: face.trackId,
+              workerGeneration: meterGeneration,
+              fresh: true,
+              exclusive: true,
+            });
+        }
+        publish({ faces: display() });
+      } catch {
+        if (token === generation) {
+          meterAvailable = false;
+          for (const t of tracks.values()) t.meter = null;
+          publish({ faces: display() });
+        }
+      } finally {
+        poseBusy = false;
+      }
+    },
     stale() {
       if (!['scanning', 'gallery_empty', 'save_failed'].includes(state.status)) return;
-      const age = now() - (pipelineAt ?? completedAt ?? now());
+      const timestamp = now();
+      let activityChanged = false;
+      for (const t of tracks.values()) {
+        const before = t.meter?.snapshot().activity;
+        t.meter?.tick?.(timestamp);
+        if (before && before.score !== t.meter?.snapshot().activity?.score) activityChanged = true;
+      }
+      const age = timestamp - (pipelineAt ?? completedAt ?? timestamp);
       if (age > 5000) {
         api.fail(new Error('Recognition stopped responding. Start scanning again.'));
         return;
       }
       if (age > 1500) {
-        for (const t of tracks.values()) clearTrack(t, 'waiting_for_analysis');
+        for (const t of tracks.values()) {
+          t.meter?.reset();
+          clearTrack(t, 'waiting_for_analysis');
+        }
         publish({ faces: [] });
       } else {
         let changed = false;
@@ -464,7 +590,7 @@ export function createLiveIdentificationWorkflow({
             clearTrack(t, 'waiting_for_analysis');
             changed = true;
           }
-        if (changed) publish({ faces: display() });
+        if (changed || activityChanged) publish({ faces: display() });
       }
     },
     async retry() {
@@ -496,6 +622,9 @@ export function createLiveIdentificationWorkflow({
       tracker.reset();
       cooldown.clear();
       engine.dispose();
+      liveness?.dispose();
+      meterAvailable = false;
+      meterInitializing = false;
       publish({ status: 'stopped', faces: [] });
     },
   };

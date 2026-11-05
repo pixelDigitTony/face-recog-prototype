@@ -17,7 +17,13 @@ test('multiple references, evaluation and tracking work on desktop and mobile', 
       return canvas.captureStream(10);
     };
     window.Worker = class {
-      async postMessage({ requestId, type, payload }) {
+      async postMessage({ requestId, id, type, payload }) {
+        if (id) {
+          this.onmessage?.({
+            data: { id, ok: false, error: 'Motion unavailable in this recognition-only fixture' },
+          });
+          return;
+        }
         let result = true;
         if (type === 'initialize')
           result = await (await fetch('/models/model-manifest.json')).json();
@@ -155,7 +161,10 @@ test('multiple references, evaluation and tracking work on desktop and mobile', 
     'Recognized: Person 0',
   );
   await expect(page.getByTestId('face-label')).toContainText('With makeup');
-  await expect(page.getByTestId('face-label')).toContainText('Tracking confirmed face');
+  await expect(page.getByTestId('face-label')).toContainText('Confirmed similarity:');
+  await expect(page.getByRole('list', { name: 'Detected faces' })).toContainText(
+    'Tracking confirmed face',
+  );
   const saved = await page.evaluate(() =>
     JSON.parse(
       localStorage.getItem(

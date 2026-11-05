@@ -1,3 +1,4 @@
+import { LivenessMeter } from './LivenessMeter';
 import { useState } from 'react';
 import {
   Alert,
@@ -70,6 +71,8 @@ function EnrollmentTrackCard({ face, session, database, live, count }) {
         border: '1px solid',
         borderColor: face?.identification?.status === 'identified' ? 'success.main' : 'divider',
         borderRadius: 2,
+        minWidth: 0,
+        overflowWrap: 'anywhere',
       }}
     >
       <Typography fontWeight={700}>Face #{trackId} · Current match similarity</Typography>
@@ -77,6 +80,7 @@ function EnrollmentTrackCard({ face, session, database, live, count }) {
         {formatPercentage(face?.identification?.similarity)}
       </Typography>
       {face && <ClosestRecord identification={face.identification} />}
+      <LivenessMeter meter={face?.meter ?? session?.meter} instructions />
       {!face && (
         <Typography>
           This face is outside the current feed. Its saved or sealed capture remains attached to
@@ -136,6 +140,7 @@ function EnrollmentTrackCard({ face, session, database, live, count }) {
           <LivenessPrompt
             liveness={session.liveness}
             status={session.status}
+            meter={session.meter}
             actionLabel="Automatic enrollment"
           />
         </Box>
@@ -189,7 +194,7 @@ function EnrollmentTrackCard({ face, session, database, live, count }) {
       {session?.review && (
         <GuidedSampleReview
           samples={session.review}
-          cameraContinues
+          cameraContinues={live.camera.active}
           busy={session.status === 'saving_set'}
           onSave={(labels) => live.saveSet(labels, trackId)}
           onDiscard={() => live.discardSet(trackId)}
@@ -227,13 +232,26 @@ export function AutomaticEnrollmentWorkspace() {
         <Button disabled>Start live scan</Button>
       </Stack>
     );
+  const sessionKey = (session) =>
+    `session:${session.meter?.accepted?.enrollmentSessionId ?? `${session.trackId}:${session.person.id}`}`;
   const offscreen = (live.sessions ?? []).filter(
-    (s) =>
-      !live.faces.some((face) => face.trackId === s.trackId) &&
-      ['review', 'set_save_failed', 'save_failed', 'retrying'].includes(s.status),
+    (session) =>
+      !live.faces.some(
+        (face) => face.enrollment && sessionKey(face.enrollment) === sessionKey(session),
+      ) &&
+      ['review', 'saving_set', 'set_save_failed', 'save_failed', 'retrying'].includes(
+        session.status,
+      ),
   );
+  const cards = [
+    ...live.faces.map((face) => ({
+      key: face.enrollment ? sessionKey(face.enrollment) : `face:${live.sessionId}:${face.trackId}`,
+      face,
+    })),
+    ...offscreen.map((session) => ({ key: sessionKey(session), session })),
+  ];
   return (
-    <Stack spacing={3}>
+    <Stack spacing={3} sx={{ minWidth: 0 }}>
       <Box>
         <Typography variant="overline">FACE LAB / ENROLLMENT</Typography>
         <Typography variant="h4">Enroll with a live camera.</Typography>
@@ -253,6 +271,8 @@ export function AutomaticEnrollmentWorkspace() {
           gridTemplateColumns: { xs: '1fr', lg: 'minmax(0,1.35fr) minmax(0,1fr)' },
           gap: 3,
           alignItems: 'start',
+          minWidth: 0,
+          '& > *': { minWidth: 0 },
         }}
       >
         <Card>
@@ -292,13 +312,13 @@ export function AutomaticEnrollmentWorkspace() {
               )}
               <Box
                 component="section"
-                aria-label="Scan instructions"
+                aria-label="Enrollment instructions"
                 sx={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
               >
                 <FaceOverlay
                   faces={live.faces}
                   frameSize={live.frameSize}
-                  showInstructions={false}
+                  showInstructions
                   status={live.status}
                   liveness={live.liveness}
                   actionLabel="Automatic enrollment"
@@ -341,7 +361,7 @@ export function AutomaticEnrollmentWorkspace() {
             )}
           </CardContent>
         </Card>
-        <Stack spacing={3}>
+        <Stack spacing={3} sx={{ minWidth: 0 }}>
           <Card>
             <CardContent>
               <Typography variant="overline">CURRENT MATCH SIMILARITY</Typography>
@@ -350,18 +370,10 @@ export function AutomaticEnrollmentWorkspace() {
                 stay attached to their own face.
               </Typography>
               <Stack spacing={2}>
-                {live.faces.map((face) => (
+                {cards.map(({ key, face, session }) => (
                   <EnrollmentTrackCard
-                    key={`${live.sessionId}:${face.trackId}`}
+                    key={key}
                     face={face}
-                    database={db.database}
-                    live={live}
-                    count={live.faces.length}
-                  />
-                ))}
-                {offscreen.map((session) => (
-                  <EnrollmentTrackCard
-                    key={`${live.sessionId}:${session.trackId}`}
                     session={session}
                     database={db.database}
                     live={live}

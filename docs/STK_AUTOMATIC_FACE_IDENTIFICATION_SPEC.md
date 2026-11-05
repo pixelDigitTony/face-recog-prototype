@@ -1,5 +1,6 @@
-# STK automatic face identification
+# Anthony's Face Lab automatic face identification
 
+Current meter extension: [Per-face liveness evidence meter](ANTHONYS_FACE_LAB_LIVENESS_METER_SPEC.md) adds transient advisory analysis on Scan while preserving identity rules and not_checked recognition history. Enroll now uses independent per-face capture sessions with separate meter and prompted-challenge gates.
 Current amendment: [Equal samples, configurable liveness and guided enrollment](ANTHONYS_FACE_LAB_SAMPLE_MATCHING_AND_CONFIGURABLE_LIVENESS_SPEC.md) supersedes primary-sample selection, schema-4 storage and paired evaluation for new results. Historical policies retain their recorded meaning.
 
 > Current scan behavior is extended by [the closest-record and lighting specification](STK_CLOSEST_FACE_MATCH_AND_LIGHTING_SPEC.md). It supersedes this document's candidate-name suppression, strict scan cutoff and color rules: current scans preview each face's closest record/photo and use `identify-85-inclusive-v2` (>=85%, stable and unique). The strict v1 rules below remain the historical reference for existing events. Enrollment behavior is unchanged.
@@ -7,8 +8,10 @@ Current amendment: [Equal samples, configurable liveness and guided enrollment](
 Current multi-sample behavior supersedes single-template assumptions: see [Anthony's Face Lab multi-sample specification](ANTHONYS_FACE_LAB_MULTI_SAMPLE_EVALUATION_SPEC.md). Scan now uses `identify-85-multisample-v3`; historical policies retain their original rules.
 
 Status: **Implemented locally — see IMPLEMENTATION.md for validation and remaining device acceptance.**
-Date: 2026-10-29 (Asia/Manila).  
-Project: `C:\Users\USER\projects\Starwinner\face-recog-prototype`.  
+Date: 2026-10-29 (Asia/Manila).
+
+Project: `C:\Users\USER\projects\Starwinner\face-recog-prototype`.
+
 Review baseline: working tree based on commit `31645a3`, including the existing uncommitted enrollment/readiness fixes. Findings below describe source inspection, not a new physical-camera or deployed-site test.
 
 ## 1. Requested behavior and scope
@@ -17,7 +20,7 @@ Change **Scan face** from selected-person verification (1:1) to automatic identi
 
 Keep **Enroll** as the guided flow: select/create a person, complete the motion challenge, then explicitly capture or replace that person's enrollment. Preserve completed steps and stable enrollment readiness from the existing fixes.
 
-This proposal interprets the earlier multiple-person requirement as **independent identification of each visible face** on Scan face. Multiple faces continue to block enrollment, where a single person must own the capture. Scan face must not stop identification solely because another face appears.
+This proposal interprets the earlier multiple-person requirement as **independent identification of each visible face** on Scan face. The later per-face enrollment coordinator also allows independent named captures for multiple people; each capture still has exactly one target. Scan face must not stop identification solely because another face appears.
 
 The application remains React JavaScript with MUI, frontend-only, with localStorage as the prototype database. Keep the existing feature/module injection boundaries for later STK integration. No backend, hosted recognition service, MongoDB connection or production STK change is part of this phase.
 
@@ -39,11 +42,11 @@ When implemented, this document supersedes the selected-person, single-face-only
 
 ### Liveness on Scan face
 
-The current implementation obtains liveness from instructed head turns. Removing scan instructions also removes that active challenge from Scan face; merely hiding the prompts would leave scanning waiting indefinitely.
+The original selected-person workflow obtained liveness from instructed head turns. Removing scan instructions also removes that active challenge from Scan face; merely hiding the prompts would leave scanning waiting indefinitely.
 
 For this implementation scope, automatic scan results carry `livenessStatus: 'not_checked'`, `liveness: null`, and `authoritative: false`. A discreet explanation in the scan summary says **Similarity identification · Liveness not checked**. Enrollment liveness is separate provenance and must never be copied into a later scan as if the current face passed.
 
-A no-instruction scan must work without initializing MediaPipe or downloading its liveness assets. Enrollment still requires those assets. Passive liveness would require a separately specified model, policy and evaluation; YuNet/SFace scores or visible movement must not be relabelled as a passive liveness pass. This prototype identification result does not authorize STK attendance or authentication.
+The [motion-evidence meter specification](ANTHONYS_FACE_LAB_LIVENESS_METER_SPEC.md) adds a shared MediaPipe observation pipeline on Scan. Its per-face percentage is transient and advisory, with no movement instructions or identity acceptance gate. Missing or failed meter assets leave identity recognition operational and show Liveness unavailable. Saved events still record not_checked and never copy enrollment proof. Basic motion evidence is not calibrated PAD or an attendance/authentication authorization.
 
 ## 3. Scan page and face labels
 
@@ -144,7 +147,7 @@ Scheduling defaults to validate during implementation:
 - Retain the 1.5-second evidence-age and per-track comparison-gap limit. A slow/overloaded track shows **Waiting for analysis** or **Analysis delayed** and drops stale identity, rather than producing Unknown or silently increasing evidence validity.
 - The supported local gallery remains at most 50 people. Measure throughput with 1, 2 and 3 simultaneous faces and galleries of 1, 10 and 50. These are test scenarios, not a promise of a fixed recognition frame rate on every device.
 
-Never initialize the active-challenge or MediaPipe worker on the Scan face path. Recognition model initialization failure blocks identification explicitly; failure of enrollment-only liveness assets must not block this scan route.
+Never start an explicit enrollment challenge on Scan. Initialize the shared meter independently of recognition, including for already confirmed faces. Recognition initialization failure blocks identification; meter failure shows an independent unavailable state and must not block scanning. Preserve the SFace confirm-once optimization and cancel both schedulers on stop, hiding, navigation or recognition/camera errors.
 
 Keep the existing single-writer policy: only the writable tab can start a session that saves identification events. Read-only/recovery tabs can inspect/export available data and show the storage status; they do not silently start unsaveable identification sessions.
 
@@ -262,7 +265,7 @@ Review findings R-11, R-14 and R-15 are implementation robustness issues beyond 
 | AI-07 | A continuously visible recognized face does not repeatedly write events. Unknown/ambiguous stability, track churn, return within cooldown and return after cooldown follow section 7. Other people can be recognized without restarting.                                                       |
 | AI-08 | Empty gallery, only diagnostic templates, incompatible/missing detector metadata and legacy enrollments are handled explicitly; no silent database reset.                                                                                                                                      |
 | AI-09 | Delete/replace a template or change scope while extraction/save is in flight: obsolete candidates/events cannot commit. Saving ordinary history does not invalidate the gallery.                                                                                                               |
-| AI-10 | Identification works when MediaPipe/liveness assets are blocked and requests none of them. Enroll still reports missing-liveness errors. Identification events never claim liveness passed.                                                                                                    |
+| AI-10 | Identification works when MediaPipe/meter assets are blocked; the independent advisory meter reports unavailable. Enroll blocks new live capture without meter evidence. Identification events never claim liveness passed.                                                                    |
 | AI-11 | v1/v2 migrations preserve records and write valid v3 once; read-only tabs, quota failure, corrupt/future schemas, reload, full JSON export and scoped reset remain correct. Old positive-result validation is retained.                                                                        |
 | AI-12 | Identification table/filter/details/deletion work with null identities; deleting a person removes linked events. Combined record/byte limits and immutable save retry/discard do not generate duplicates or false Saved labels.                                                                |
 | AI-13 | Hidden tab, navigation, camera disconnection, Stop during loading/permission/inference, worker error and hard timeout clear labels, stop streams and release workers. Late replies cannot publish or save.                                                                                     |

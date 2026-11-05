@@ -40,7 +40,7 @@ export function candidateAnnouncement(identification) {
     : status;
 }
 
-export function ClosestRecord({ identification, compact = false }) {
+export function ClosestRecord({ identification, compact = false, overlay = false }) {
   const candidate = identification?.closestCandidate;
   const { recognized, status } = identificationPresentation(identification);
   if (!candidate) return <Box component="div">{status}</Box>;
@@ -65,20 +65,55 @@ export function ClosestRecord({ identification, compact = false }) {
           </Box>
         </Avatar>
       </Tooltip>
-      <Box sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-        <Box sx={{ fontWeight: 700 }}>
+      <Box sx={{ minWidth: 0, flex: 1, overflowWrap: 'anywhere' }}>
+        <Box
+          title={recognized ? `Recognized: ${displayName} (${employeeCode})` : undefined}
+          sx={{
+            fontWeight: 700,
+            ...(overlay && { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }),
+          }}
+        >
           {recognized
             ? `Recognized: ${displayName} (${employeeCode})`
             : 'Closest record — unconfirmed'}
         </Box>
         {!recognized && (
-          <Box>
+          <Box
+            title={`${displayName} (${employeeCode})`}
+            sx={
+              overlay
+                ? { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+                : undefined
+            }
+          >
             {displayName} ({employeeCode})
           </Box>
         )}
-        {candidate.sampleLabel && <Box>{candidate.sampleLabel}</Box>}
-        {!recognized && <Box>{status}</Box>}
-        {recognized && identification.tracked && <Box>Tracking confirmed face</Box>}
+        {candidate.sampleLabel && (
+          <Box
+            title={candidate.sampleLabel}
+            sx={
+              overlay
+                ? { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+                : undefined
+            }
+          >
+            {candidate.sampleLabel}
+          </Box>
+        )}
+        {!recognized && (
+          <Box
+            title={status}
+            sx={
+              overlay
+                ? { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+                : undefined
+            }
+          >
+            {status}
+          </Box>
+        )}
+        {!overlay && recognized && identification.tracked && <Box>Tracking confirmed face</Box>}
       </Box>
     </Stack>
   );

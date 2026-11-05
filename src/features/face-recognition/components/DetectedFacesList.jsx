@@ -1,3 +1,4 @@
+import { LivenessMeter } from './LivenessMeter';
 import { livenessLabel } from '@/utils/hooks/faceRecognition/liveness/livenessPolicy';
 import { Box, List, ListItem, Typography } from '@mui/material';
 import { formatPercentage } from '@/utils/hooks/faceRecognition/recognition/matchPolicy';
@@ -41,6 +42,7 @@ export function DetectedFacesList({
                     : `${face.reasonCode?.replaceAll('_', ' ') || status.replaceAll('_', ' ')}${person ? ` · Verifying against ${person.displayName} (${person.employeeCode})` : ''} · Match: ${formatPercentage(similarity)} · Liveness: ${livenessLabel(liveness)}`}
                 </Typography>
               )}
+              <LivenessMeter meter={face.meter} instructions={!identification} />
               <LightingFeedback lighting={face.quality?.lighting} guidance={!identification} />
             </Box>
           </ListItem>

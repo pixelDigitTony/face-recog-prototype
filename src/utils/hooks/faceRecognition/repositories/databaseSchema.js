@@ -1,3 +1,6 @@
+import { validatePhysicalTrial } from './physicalTrial';
+import { LIVENESS_METER_POLICY } from '../liveness/livenessMeterPolicy';
+import { validateLivenessMeter } from '../liveness/validateLivenessMeter';
 import {
   validateLivenessSettings,
   validateEnrollmentEvidence,
@@ -24,6 +27,7 @@ export function createDatabase(scope) {
     attempts: [],
     identificationEvents: [],
     evaluationTrials: [],
+    physicalTrials: [],
     settings: structuredClone(defaultSettings),
   };
 }
@@ -89,6 +93,16 @@ export function validateDatabase(db, scope, legacy = false) {
         fail('Invalid or oversized thumbnail.');
     }
   }
+  if (db.schemaVersion >= 5 && db.physicalTrials !== undefined) {
+    if (!Array.isArray(db.physicalTrials) || db.physicalTrials.length > 100)
+      fail('Invalid physical trial collection.');
+    const ids = new Set();
+    for (const trial of db.physicalTrials) {
+      validatePhysicalTrial(trial, scope);
+      if (ids.has(trial.id)) fail('Duplicate physical trial.');
+      ids.add(trial.id);
+    }
+  }
   const people = new Map(db.people.map((p) => [p.id, p]));
   const codes = new Set();
   for (const person of db.people) {
@@ -143,6 +157,10 @@ export function validateDatabase(db, scope, legacy = false) {
     )
       fail('Invalid sample label.');
     validateEmbedding(template.embedding);
+    if (template.livenessMeter) {
+      if (!template.livenessMeter.capture) fail('Sample capture evidence is incomplete.');
+      validateLivenessMeter(template.livenessMeter);
+    }
   }
   for (const attempt of db.attempts) {
     if (
@@ -171,7 +189,11 @@ export function validateDatabase(db, scope, legacy = false) {
       fail('Invalid similarity.');
     if (!Number.isFinite(attempt.thresholdSnapshot) || Math.abs(attempt.thresholdSnapshot) > 1)
       fail('Invalid threshold snapshot.');
-    if ([ENROLLMENT_POLICY, MULTI_ENROLLMENT_POLICY].includes(attempt.decisionPolicyVersion))
+    if (
+      [ENROLLMENT_POLICY, MULTI_ENROLLMENT_POLICY, LIVENESS_METER_POLICY.enrollmentPolicy].includes(
+        attempt.decisionPolicyVersion,
+      )
+    )
       validateEnrollmentEvidence(attempt);
     if (attempt.decisionPolicyVersion === LIVE_POLICY) {
       if (['MATCH', 'ENROLLED'].includes(attempt.outcome)) {

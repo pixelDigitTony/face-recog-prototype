@@ -10,7 +10,16 @@ function SampleCard({ sample, disabled, onReplace, commit, manifest }) {
   const [label, setLabel] = useState(sample.label),
     [confirm, setConfirm] = useState(false);
   return (
-    <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}>
+    <Box
+      sx={{
+        border: '1px solid',
+        borderColor: 'divider',
+        borderRadius: 2,
+        p: 1.5,
+        minWidth: 0,
+        overflowWrap: 'anywhere',
+      }}
+    >
       <Stack direction="row" spacing={1} alignItems="center">
         <Avatar
           src={sample.thumbnailDataUrl || undefined}
@@ -32,7 +41,14 @@ function SampleCard({ sample, disabled, onReplace, commit, manifest }) {
             ? 'Compatible model'
             : 'Incompatible model'
           : 'Load models to check compatibility'}{' '}
-        · {livenessLabel(sample.liveness ?? { status: sample.enrollmentLiveness })}
+        · Enrollment challenge:{' '}
+        {livenessLabel(sample.liveness ?? { status: sample.enrollmentLiveness })}
+      </Typography>
+      <Typography variant="caption" display="block">
+        Motion evidence:{' '}
+        {sample.livenessMeter
+          ? `${Math.round(sample.livenessMeter.acceptedScore)}% - Basic motion checks met`
+          : 'Not recorded'}
       </Typography>
       <Typography variant="caption" display="block">
         Brightness: {sample.quality?.brightness?.toFixed(0) ?? 'Not recorded'} · Sharpness:{' '}

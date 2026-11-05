@@ -1,3 +1,4 @@
+import { LivenessMeter } from './LivenessMeter';
 import { useEffect, useRef, useState } from 'react';
 import { Box } from '@mui/material';
 import { LivenessPrompt } from './LivenessPrompt';
@@ -63,19 +64,25 @@ function FaceLabel({
         overflowWrap: 'anywhere',
       }}
     >
-      {showInstructions && (
+      {showInstructions && face.enrollment?.active && (
         <Box sx={{ mb: 0.75 }}>
           {face.enrollment?.person && (
             <Box sx={{ fontSize: 12, fontWeight: 700 }}>
               Enrolling {face.enrollment.person.displayName}
             </Box>
           )}
-          <LivenessPrompt compact liveness={liveness} status={status} actionLabel={actionLabel} />
+          <LivenessPrompt
+            compact
+            liveness={face.enrollment.liveness}
+            status={face.enrollment.status}
+            meter={face.meter}
+            actionLabel={actionLabel}
+          />
         </Box>
       )}
       <Box data-testid="face-label-details" sx={{ fontSize: 11, lineHeight: 1.4 }}>
         {face.identification && (
-          <ClosestRecord identification={face.identification} compact={width < 160} />
+          <ClosestRecord identification={face.identification} compact overlay />
         )}
         Face #{face.trackId} · Detection {(face.confidence * 100).toFixed(1)}%
         {faceSimilarity !== null && faceSimilarity !== undefined && (
@@ -86,6 +93,7 @@ function FaceLabel({
           </>
         )}
       </Box>
+      <LivenessMeter meter={face.meter} instructions={showInstructions} compact />
       <LightingFeedback lighting={face.quality?.lighting} guidance={showInstructions} />
     </Box>
   );

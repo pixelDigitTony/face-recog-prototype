@@ -1,6 +1,6 @@
 ' Implemented frontend prototype; acceptance evidence: IMPLEMENTATION.md.
 ' Companion: STK_FACE_RECOGNITION_PROTOTYPE_SPEC.md
-' Fourteen named diagrams: capture, tracking, enrollment and comparative evaluation.
+' Named diagrams: capture, tracking, evaluation, motion evidence and live activity.
 
 @startuml stk_face_prototype_components
 title Anthony's Face Lab - frontend component boundaries
@@ -25,10 +25,13 @@ node "Browser - prototype origin" as Browser {
   component "FaceEngine" as EnginePort <<interface>>
   component "BrowserFaceEngine\nworker client" as Engine
   component "Camera hook\ngetUserMedia and Canvas" as Camera
-  component "LiveFaceWorkflow\nsession / tracking / >85% gate" as Live
+  component "LiveFaceWorkflow\nlegacy selected-person verification" as Live
+  component "MultiEnrollmentWorkflow\nper-person challenge / meter / capture" as MultiEnroll
   component "LiveIdentificationWorkflow\ngallery / per-face windows / deduplication" as Identify
   component "Frame scheduler\none pipeline in flight" as Scheduler
   component "Liveness worker\nMediaPipe Face Landmarker" as Liveness
+  component "Per-track motion evidence\npure reducer / immutable policy" as Meter
+  component "Physical evaluation workflow\ntimed segments / sealed review / metrics" as Physical
   node "Dedicated Web Worker" as Worker {
     component "Model loader and image adapters" as Adapters
     component "OpenCV.js\npreprocessing and alignment" as CV
@@ -45,11 +48,23 @@ Feature --> Camera : explicit camera controls
 Camera --> Workflow : captured frame
 Camera --> Scheduler : sampled frame
 Scheduler --> Live : analyze, never queue video
+Scheduler --> MultiEnroll : automatic Enroll; independent tracks
 Scheduler --> Identify : automatic scan; no selected person
+Scheduler --> Physical : physical trial; exclusive active evaluation mode
+Physical --> Engine : bounded face detection; no identity writes
+Physical --> Liveness : shared fresh per-face observations
+Physical --> Meter : independent segment-bound proof and activity
+Physical --> RepositoryPort : explicit savePhysicalTrial / exact retry
 Identify --> Engine : gallery + detect / extract selected faces
 Identify --> RepositoryPort : immutable identification event
 Live --> Engine : all boxes / optional embedding
 Live --> Liveness : per-face pose evidence
+MultiEnroll --> Liveness : shared motion observations
+MultiEnroll --> Engine : bounded discovery / capture extraction
+MultiEnroll --> Workflow : sealed enrollment evidence
+Liveness --> Meter : exclusive fresh observations
+Identify --> Meter : advisory; confirmed identities continue
+MultiEnroll --> Meter : separate enrollment gate
 Live --> Workflow : one prepared terminal attempt
 Workflow --> RepositoryPort : scoped operations
 RepositoryPort <|.. Repository
@@ -81,6 +96,168 @@ note top of Feature
   Public entry supports an existing STK theme/router.
   Later: inject an STK API workflow adapter for
   server-authoritative enrollment and verification.
+end note
+@enduml
+
+@startuml anthonys_physical_camera_evaluation
+title Anthony's Face Lab - physical camera and presentation trial lifecycle
+skinparam shadowing false
+actor Operator
+participant "MUI setup / camera hook" as UI
+participant "Physical evaluation workflow" as Flow
+participant "Verified detector / shared pose worker" as Worker
+participant "Independent per-segment checks" as Segment
+database "Local repository / schema 5" as DB
+participant "Experimental report" as Report
+Operator -> UI : label, device, conditions, duration, authorization
+UI -> Flow : start(options); initialize pinned models and challenge config
+Flow --> UI : ready
+UI -> UI : getUserMedia; wait for playable video
+UI -> Flow : begin(actual camera metadata)
+Flow -> Flow : start monotonic protocol clock now
+loop bounded detection and motion observation
+  UI -> Worker : one request per scheduler in flight
+  Worker --> Flow : source-tagged fresh face detections / motion channels
+  Flow -> Segment : exclusive association; unique continuous segment ID
+  Segment -> Segment : strict capture-meter events + separate challenge
+  Segment --> UI : live 50/50 activity, check status, attached prompt
+  Flow -> Flow : aggregate counts, spans, intervals, pass times
+end
+alt target duration reached with healthy workers
+  Flow -> Flow : seal timed trial and active segments
+else Stop / hide / navigation / worker or camera failure
+  Flow -> Flow : seal interrupted trial; retain review
+end
+Flow --> UI : immutable measurements; stop camera and schedulers
+Operator -> UI : label each segment genuine / attack subtype / unscored
+UI -> Flow : save(review labels)
+Flow -> DB : validate compact provenance and derived outcomes; atomic commit
+alt storage failure
+  DB --> Flow : preserve exact pending operation
+  Operator -> Flow : retry same ID / discard
+else saved
+  DB --> Report : physicalTrials, separate from recognition trials
+  Report -> Report : complete measured scored segments only in denominators
+  Report --> UI : counts and rates; incomplete/unmeasured separate
+end
+note over Flow, Report
+  Missing or ambiguous faces end their own segment; reused track IDs get fresh proof.
+  Lost segments remain incomplete even if the trial later ends on time.
+  Zero denominator is Unmeasured; no inferred spoof rejection from missing evidence.
+  Compact records omit frames, images, embeddings and raw landmarks.
+  Operator-run trials are required; automated fixtures do not establish attack resistance.
+end note
+@enduml
+
+@startuml anthonys_liveness_meter_capture
+title Anthony's Face Lab - separate motion evidence and enrollment challenge gates
+skinparam shadowing false
+actor Operator
+participant "Camera / bounded scheduler" as Camera
+participant "Shared MediaPipe worker" as Worker
+participant "Exclusive track association" as Associate
+participant "Per-track meter" as Meter
+participant "Per-track challenge" as Challenge
+participant "Enrollment coordinator" as Enroll
+database "Repository / schema 5" as DB
+Operator -> Camera : Start camera
+loop preview and Scan
+  Camera -> Worker : one fresh frame; meter channels enabled
+  Worker -> Associate : face boxes, rotation, blink, nonrigid features
+  Associate -> Meter : exclusive, fresh, source-tagged observation
+  Meter --> Camera : live activity 50 face/blink + 50 head; separate proof state
+end
+Operator -> Enroll : name Face N; Enter / explicit Add or Replace
+Enroll -> Enroll : snapshot configuration; require >=1 prompted test
+Enroll -> Meter : fresh enrollment session; discard preview authority
+Enroll -> Challenge : start configured randomized challenge
+loop observations for this continuous face
+  Camera -> Worker : shared bounded observation request
+  Worker -> Associate : per-face motion features
+  Associate -> Meter : same fresh observation
+  Associate -> Challenge : same fresh observation
+  Meter -> Meter : temporal events; 40/25/35 points
+  Meter -> Meter : >=60; two completed families; >=12 observations / >=2s
+  Challenge -> Challenge : independently retain completed prompted steps
+  Meter --> Enroll : latched basic-motion result
+  Challenge --> Enroll : configured tests complete
+end
+alt both gates plus fresh association / pose / quality / consistency
+  Enroll -> DB : enrollment-per-face-meter-v3 + compact meter proof
+  DB -> DB : validate both gates; session/track/time/event bindings
+  DB --> Enroll : atomic per-person save or exact retry
+else either gate incomplete or unavailable
+  Enroll --> Camera : pause only affected capture; retain valid progress
+end
+note over Meter, DB
+  motion-evidence-v1 is evidence completion, not a liveness probability.
+  Shared motion inputs are not independent security factors.
+  Scan meter is transient and cannot gate identity recognition.
+  Historical decisions keep original policy validation.
+  Guided reviews and retries preserve sealed capture evidence.
+  Live activity resets after 15 seconds without qualified movement.
+  An idle reset never revokes completed capture proof.
+end note
+@enduml
+
+@startuml anthonys_liveness_meter_states
+title Anthony's Face Lab - independent per-face meter lifetime
+skinparam shadowing false
+[*] --> Initializing : explicit camera start
+Initializing --> Collecting : verified channels / exclusive track
+Initializing --> Unavailable : missing assets or channels
+Collecting --> Collecting : fresh event phases; pre-pass 10s window
+Collecting --> PassedBasic : >=60 and two completed families\n>=12 valid observations spanning >=2s
+Collecting --> Paused : unusable quality / insufficient sampling
+Paused --> Collecting : usable feed; retain unexpired completed events
+PassedBasic --> PassedBasic : same quiet continuous face; retain accepted proof and time
+PassedBasic --> PassedPaused : temporary capture-quality or freshness loss
+PassedPaused --> PassedBasic : recover fresh usable association
+Collecting --> Invalidated : loss / ambiguity / stale beyond continuity limit
+PassedBasic --> Invalidated : loss / ambiguity / new enrollment
+PassedPaused --> Invalidated : continuity lost
+Unavailable --> Initializing : explicit retry with recovered worker
+Invalidated --> Initializing : new camera / track generation / enrollment
+Initializing --> [*] : stop / hide / navigate
+Collecting --> [*] : stop / hide / navigate
+PassedBasic --> [*] : stop / hide / navigate
+note right of PassedBasic
+  Accepted proof is session-bound.
+  Enrollment also needs explicit challenge pass
+  and fresh pose/quality/consistency at capture.
+  Sealed review/save evidence outlives live tracking.
+end note
+@enduml
+
+@startuml anthonys_live_movement_retention
+title Anthony's Face Lab - transient live activity beside immutable capture evidence
+skinparam shadowing false
+participant "Fresh exclusive observations" as Input
+participant "Per-track live movement reducer" as Activity
+participant "Per-track capture meter" as Proof
+participant "Existing monotonic scheduler" as Clock
+participant "MUI face label / accessible list" as UI
+Input -> Activity : bilateral blink or supported nonrigid expression change
+Activity -> Activity : shared face bucket = 50; refresh last movement
+Input -> Activity : meaningful yaw/pitch change
+Activity -> Activity : head bucket = 50; refresh last movement
+Input -> Proof : original motion-evidence-v1 temporal events
+Proof -> Proof : latch accepted proof when original checks pass
+Activity --> UI : transient score = face + head, max 100
+Proof --> UI : separate check status and accepted time
+loop continuing qualified movement
+  Input -> Activity : refresh timer even when bucket is full
+  Activity --> UI : retain highest contributions
+end
+Clock -> Activity : at least 15,000 ms since last qualified movement
+Activity -> Activity : reset both activity buckets to 0
+Activity --> UI : No recent movement; completed checks unchanged
+note over Activity, Proof
+  Held poses, detector jitter and box translation do not refresh activity.
+  Quality pauses retain activity until the idle boundary.
+  True continuity loss starts a fresh face operation.
+  Saved attempts, samples and sealed retry proof never store live activity.
+  Scan continues activity after identity confirmation without repeated SFace matching.
 end note
 @enduml
 
@@ -125,6 +302,39 @@ class EvaluationTrial {
 PrototypeDatabase "1" *-- "0..100" EvaluationTrial
 Person "0..1" -- "0..*" EvaluationTrial : manually labeled trials
 
+class PhysicalTrial {
+  id / cameraSessionId : UUID
+  companyId / storeId : scope
+  policy : physical-motion-evaluation-v1
+  label / deviceLabel / lighting / appearance : bounded conditions
+  expectedGroupSize : 1..10
+  durationSeconds : 15 | 30 | 60
+  camera / modelIdentity / livenessIdentity : compact provenance
+  meterPolicyVersion / activityPolicyVersion : snapshots
+  configuration : immutable prompted tests
+  startedAt / completedAt : UTC timestamps
+  startTimestamp / endTimestamp : monotonic camera clock
+  completion : timed | interrupted
+  reason : bounded string
+}
+class PhysicalFaceSegment {
+  segmentId : unique continuous segment UUID
+  trackId / firstSeenAt / lastSeenAt / endReason
+  observationCount / firstObservationAt / lastObservationAt
+  maxGapMs / gapCount / peakActivity : aggregate metrics
+  meterPassedAt / challengePassedAt / combinedPassedAt : nullable
+  meterProof / challenge : compact independent summaries
+  label / truth / attackSubtype : explicit operator review
+}
+PrototypeDatabase "1" *-- "0..100" PhysicalTrial : optional physicalTrials; schema 5
+PhysicalTrial "1" *-- "0..100" PhysicalFaceSegment
+note right of PhysicalTrial
+  Separate from recognition evaluation and enrollment records.
+  No raw frames, images, embeddings or landmarks.
+  Shared 3 MiB budget; no eviction.
+  Missing collection in old schema-5 data means empty.
+end note
+
 class IdentificationEvent {
   id / sessionId / encounterId : UUID
   trackId : temporary integer
@@ -150,6 +360,7 @@ class FaceTemplate {
   preprocessingVersion : string
   qualityPolicyVersion : string
   quality : measured values
+  livenessMeter : compact motion-evidence-v1 proof or absent historically
   thumbnailDataUrl : string or null
   createdAt : UTC timestamp
 }
@@ -174,10 +385,11 @@ class CaptureAttempt {
   thumbnailDataUrl : string or null
   matchPercentage : number or null
   comparisonOperator : > for new live policy
-  decisionPolicyVersion : enrollment-configurable-liveness-v1 or historical
+  decisionPolicyVersion : enrollment-per-face-meter-v3 or historical
   source : live_camera | test_image | legacy_unknown
   livenessStatus : passed_basic | failed | expired | not_checked
   liveness : bounded challenge summary
+  livenessMeter : separate bounded motion summary
   sessionId / trackId : temporary tracking scope
 }
 
@@ -237,6 +449,8 @@ note bottom of CaptureAttempt
   Only committed attempts appear in the database table.
   Unsaved results remain transient in UI memory.
   Null means unavailable, never a fabricated measurement.
+  New live enrollment needs both meter and configured challenge.
+  Historical all-disabled challenges retain their original interpretation.
 end note
 @enduml
 
@@ -418,53 +632,42 @@ end note
 @enduml
 
 @startuml stk_live_face_states
-title Enrollment states - configurable challenges and sealed guided review
+title Per-face enrollment states - separate gates and sealed review
 skinparam shadowing false
-[*] --> Idle
-Idle --> Loading : explicit Start
-Loading --> Tracking : local models ready + camera
-Loading --> Error : missing assets / camera / read-only
-Tracking --> Challenging : one selected eligible face; neutral baseline
-Tracking --> Blocked : multiple / missing / quality / ambiguity
-Challenging --> Blocked : continuity lost; revoke challenge
-Blocked --> Challenging : same track resumes steps; new track starts fresh
-Challenging --> Comparing : compatibility verification; required challenges completed
-Challenging --> PreparingEnrollment : enabled enrollment challenges completed
-Tracking --> PreparingEnrollment : all challenges disabled; quality gates remain
-Challenging --> Challenging : incorrect action / delay; retain completed steps
-Comparing --> Saving : stable match / no match with fresh observations
-Comparing --> Blocked : multiple faces / tracking lost
-PreparingEnrollment --> EnrollmentReady : canonical post-challenge embedding ready
-PreparingEnrollment --> Blocked : missing / multiple face; quality / continuity blocked
-EnrollmentReady --> CapturingEnrollment : explicit capture; latch action
-EnrollmentReady --> EnrollmentReady : detection only; skip pose and identity checks
-EnrollmentReady --> Blocked : missing / multiple / ambiguous face; continuity lost
-CapturingEnrollment --> Saving : single capture; fresh pose / quality / candidate
-CapturingEnrollment --> PreparingEnrollment : guided set; next same-face pose
-CapturingEnrollment --> Review : third guided capture; seal evidence and stop camera
+[*] --> Tracking : explicit camera start
+Tracking --> Challenging : name + Enter / explicit Add or Replace\n>=1 enabled challenge; fresh meter session
+Tracking --> ConfigurationBlocked : historical all-off settings
+ConfigurationBlocked --> Tracking : enable a prompted test; restart
+Challenging --> Challenging : retain separate passed steps and meter events
+Challenging --> QualityPaused : temporary unusable image
+QualityPaused --> Challenging : same continuous face recovers
+Challenging --> PreparingEnrollment : meter AND challenge complete
+PreparingEnrollment --> PreparingEnrollment : fresh pose hold / same-pose consistency
+PreparingEnrollment --> Capturing : quality + exclusive association + fresh observation
+Capturing --> PreparingEnrollment : guided set; next required pose
+Capturing --> Saving : one sample sealed
+Capturing --> Review : three samples sealed; other faces continue
 Review --> Saving : explicit atomic Save three samples
-Review --> Completed : discard set
-Saving --> Review : guided persistence failure; retain evidence
-CapturingEnrollment --> EnrollmentReady : rejected capture; retain completed steps; show retry message
-CapturingEnrollment --> Blocked : tracking / context invalidated
-Saving --> Completed : atomic commit success
-Saving --> Unsaved : persistence failed
-Unsaved --> Saving : same attempt ID; no repeated inference
+Saving --> Review : guided quota failure; retain exact records
+Saving --> Unsaved : single save failed; retain exact operation
+Unsaved --> Saving : explicit retry; no new inference/timestamps
+Saving --> Completed : atomic commit
+Review --> Completed : explicit discard
 Unsaved --> Completed : explicit discard
-Completed --> Tracking : explicit next verification; new session
+Challenging --> Invalidated : disappearance / crossing / stale / worker restart
+PreparingEnrollment --> Invalidated : lost continuity
+Invalidated --> Tracking : confirm name / action again
+Completed --> Tracking : next explicit sample operation starts fresh proof
 Tracking --> Stopped : stop / hide / navigation
-Blocked --> Stopped : stop / hide / navigation
 Challenging --> Stopped : stop / hide / navigation
-Comparing --> Stopped : stop / hide / navigation
 PreparingEnrollment --> Stopped : stop / hide / navigation
-EnrollmentReady --> Stopped : stop / hide / navigation
-CapturingEnrollment --> Stopped : stop / hide / navigation
-Stopped --> Loading : explicit restart
-Error --> Loading : explicit retry
-note right of Completed
-  Detection boxes continue to update.
-  Last completed result is separate from current face.
-  Never save every frame or repeat the same session.
+Review --> Review : stop / disappearance preserves sealed proof
+Unsaved --> Unsaved : stop / disappearance preserves pending save
+Stopped --> Tracking : explicit restart; distinct live track namespace
+note right of Review
+  Sealed evidence is independent of returning live faces.
+  Reviews and failed saves stay explicit save/retry/discard actions.
+  Other faces keep their own progress and capture state.
 end note
 @enduml
 
@@ -571,8 +774,8 @@ loop one pipeline at a time until Stop / hide / error
   Scan -> Worker : releaseFrame(frameId)
 end
 note over Scan, DB
-  No motion instructions or MediaPipe initialization on Scan.
-  Scan liveness = not_checked; authoritative = false.
+  No challenge instructions on Scan. Shared MediaPipe meter remains advisory.
+  Saved Scan liveness = not_checked; advisory meter is transient; authoritative = false.
   Enrollment retains its separate active challenge.
   One unsaved event pauses identification until retry/discard.
   History writes do not change gallery version.
@@ -635,20 +838,22 @@ end note
  participant "MediaPipe worker" as Pose
  participant "YuNet / SFace worker" as Engine
  database "localStorage schema 5" as DB
- Operator -> UI : select person and single / guided mode
+ Operator -> UI : name tracked face / explicit Add; choose single or guided
  UI -> Flow : start; expected enrollment revision
  Flow -> DB : snapshot settings and sample capacity
  Flow -> Challenge : immutable turnLeft / turnRight / blink configuration
  alt all tests disabled
-   Challenge --> Flow : not_checked; disabled_in_settings
+   Flow --> UI : block new enrollment; enable a prompted test
+   note right: Historical disabled records remain readable.
  else enabled tests
-   loop observation worker; one request in flight; blink target 20 Hz
+   loop shared observation worker; one request in flight; target 20 Hz
      UI -> Pose : unmirrored frame and capture timestamp
-     Pose --> Flow : face box, yaw, optional eye-blink scores
+     Pose --> Flow : face box, yaw/pitch, blink and expression features
      Flow -> Challenge : fresh observation associated with current track
      Challenge --> UI : attached prompt; retain completed steps
    end
    Challenge --> Flow : passed_basic; session-bound evidence
+   Flow -> Flow : also require separate motion-evidence-v1 pass
  end
  loop one capture or front / slight left / slight right
    UI -> Engine : fresh quality-valid capture
@@ -657,7 +862,7 @@ end note
    Flow --> UI : retain in memory; next pose prompt
  end
  alt guided set
-   Flow --> UI : sealed review; stop camera processing; clear overlays
+   Flow --> UI : sealed per-face review; camera and other faces continue
    Operator -> UI : edit labels; Save three samples
    UI -> Flow : saveSet(labels)
    Flow -> DB : addSampleSet(3 templates + 3 attempts, revision, set ID)
@@ -667,7 +872,7 @@ end note
      DB --> UI : retain review for safe retry / discard
    end
  else single capture
-   Flow -> DB : saveEnrollment under configurable policy
+   Flow -> DB : saveEnrollment under enrollment-per-face-meter-v3
  end
  note over Flow, Challenge
    Wrong action retries the current step; same-face passed steps remain.
@@ -759,7 +964,7 @@ end note
  UI -> Flow : nameDetectedFace(track ID, name or matched person ID)
  Flow -> Match : verify fresh same track and unchanged gallery
  Flow -> Flow : bind target; keep new person in memory
- Flow -> Checks : configured challenges and fresh same-pose consistency
+ Flow -> Checks : fresh meter + configured challenges + same-pose consistency
  Checks --> Flow : ready; request capture automatically
  alt successful single enrollment
    Flow -> DB : saveEnrollment(newPerson?, template, attempt)
@@ -796,16 +1001,16 @@ end note
  database "localStorage schema 5" as DB
  Operator -> UI : name Face 1; Enter\nname Face 2; Enter
  UI -> Flow : bind each fresh track independently
- Flow -> Tracks : person drafts, challenges and immutable settings
+ Flow -> Tracks : person drafts, separate meters/challenges, immutable settings
  loop bounded frame processing
    UI -> Recognition : scene frame; at most two recognition crops per comparison
    Recognition --> Flow : detections and embeddings keyed by detection ID
-   UI -> Pose : scene frame; optional independent blink observations
-   Pose --> Associate : multiple boxes, yaw and eye scores
+   UI -> Pose : shared scene frame; meter observations target 20 Hz
+   Pose --> Associate : boxes, yaw/pitch, blink and expression features
    Flow -> Associate : tracked boxes and ambiguity flags
    Associate --> Tracks : exclusive observations keyed by track ID
    loop each active enrollment
-     Tracks -> Tracks : update only own steps and capture consistency
+     Tracks -> Tracks : update own meter, challenge and capture consistency
      alt ready single capture
        Tracks -> DB : atomic person + sample + attempt
        DB --> UI : per-face saved / retry result
@@ -819,7 +1024,7 @@ end note
    end
  end
  note over Tracks, DB
-   New policy: enrollment-per-face-liveness-v2.
+   New policy: enrollment-per-face-meter-v3; v2 remains historical.
    Actual scene count and single-target count are separate.
    Record exclusive IoU, boxes, timestamps and track bindings.
    Old policies retain strict single-face validation.

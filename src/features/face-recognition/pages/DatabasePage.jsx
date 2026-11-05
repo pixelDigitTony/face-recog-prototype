@@ -77,6 +77,15 @@ export function DatabasePage() {
             },
             { key: 'label', label: 'Sample label' },
             { key: 'version', label: 'Version' },
+            {
+              key: 'livenessMeter',
+              label: 'Motion evidence',
+              render: (row) =>
+                row.livenessMeter
+                  ? `${Math.round(row.livenessMeter.acceptedScore)}% - Basic motion checks met`
+                  : 'Not recorded',
+            },
+            { key: 'enrollmentLiveness', label: 'Enrollment challenge' },
             { key: 'modelIdentity', label: 'Model', render: () => 'SFace · 128 values' },
             {
               key: 'thumbnailDataUrl',
@@ -122,75 +131,94 @@ export function DatabasePage() {
               { key: 'source', label: 'Source' },
               { key: 'decisionPolicyVersion', label: 'Policy' },
             ]
-          : tab === 'attempts'
+          : tab === 'physicalTrials'
             ? [
-                { key: 'completedAt', label: 'Time', render: (row) => formatDate(row.completedAt) },
-                {
-                  key: 'personSnapshot',
-                  label: 'Person',
-                  render: (row) => (
-                    <>
-                      <Typography variant="body2" fontWeight={600}>
-                        {row.personSnapshot.displayName}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {row.personSnapshot.employeeCode}
-                      </Typography>
-                    </>
-                  ),
-                },
-                { key: 'purpose', label: 'Purpose' },
-                {
-                  key: 'outcome',
-                  label: 'Outcome',
-                  render: (row) => (
-                    <Chip
-                      size="small"
-                      label={row.outcome.replaceAll('_', ' ')}
-                      color={['MATCH', 'ENROLLED'].includes(row.outcome) ? 'success' : 'default'}
-                      variant="outlined"
-                    />
-                  ),
-                },
-                {
-                  key: 'similarity',
-                  label: 'Match similarity',
-                  render: (row) => formatPercentage(row.similarity),
-                },
-                { key: 'livenessStatus', label: 'Liveness' },
-                { key: 'source', label: 'Source' },
-                { key: 'faceCountAtDecision', label: 'Face count' },
-                { key: 'decisionPolicyVersion', label: 'Policy' },
-                {
-                  key: 'thresholdSnapshot',
-                  label: 'Threshold',
-                  render: (row) => row.thresholdSnapshot.toFixed(4),
-                },
-                {
-                  key: 'timingsMs',
-                  label: 'Time',
-                  render: (row) =>
-                    row.timingsMs.total ? `${Math.round(row.timingsMs.total)} ms` : '—',
-                },
-                {
-                  key: 'thumbnailDataUrl',
-                  label: 'Thumbnail',
-                  render: (row) => (
-                    <Avatar
-                      variant="rounded"
-                      src={row.thumbnailDataUrl ?? undefined}
-                      alt="Capture thumbnail"
-                    >
-                      —
-                    </Avatar>
-                  ),
-                },
+                { key: 'id', label: 'Trial ID' },
+                { key: 'startedAt', label: 'Started', render: (row) => formatDate(row.startedAt) },
+                { key: 'label', label: 'Trial label' },
+                { key: 'completion', label: 'Completion' },
               ]
-            : [
-                { key: 'key', label: 'Key' },
-                { key: 'value', label: 'Value' },
-                { key: 'type', label: 'Type' },
-              ];
+            : tab === 'attempts'
+              ? [
+                  {
+                    key: 'completedAt',
+                    label: 'Time',
+                    render: (row) => formatDate(row.completedAt),
+                  },
+                  {
+                    key: 'personSnapshot',
+                    label: 'Person',
+                    render: (row) => (
+                      <>
+                        <Typography variant="body2" fontWeight={600}>
+                          {row.personSnapshot.displayName}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {row.personSnapshot.employeeCode}
+                        </Typography>
+                      </>
+                    ),
+                  },
+                  { key: 'purpose', label: 'Purpose' },
+                  {
+                    key: 'outcome',
+                    label: 'Outcome',
+                    render: (row) => (
+                      <Chip
+                        size="small"
+                        label={row.outcome.replaceAll('_', ' ')}
+                        color={['MATCH', 'ENROLLED'].includes(row.outcome) ? 'success' : 'default'}
+                        variant="outlined"
+                      />
+                    ),
+                  },
+                  {
+                    key: 'similarity',
+                    label: 'Match similarity',
+                    render: (row) => formatPercentage(row.similarity),
+                  },
+                  {
+                    key: 'livenessMeter',
+                    label: 'Motion evidence',
+                    render: (row) =>
+                      row.livenessMeter
+                        ? `${Math.round(row.livenessMeter.acceptedScore)}% - Basic motion checks met`
+                        : 'Not recorded',
+                  },
+                  { key: 'livenessStatus', label: 'Enrollment challenge' },
+                  { key: 'source', label: 'Source' },
+                  { key: 'faceCountAtDecision', label: 'Face count' },
+                  { key: 'decisionPolicyVersion', label: 'Policy' },
+                  {
+                    key: 'thresholdSnapshot',
+                    label: 'Threshold',
+                    render: (row) => row.thresholdSnapshot.toFixed(4),
+                  },
+                  {
+                    key: 'timingsMs',
+                    label: 'Time',
+                    render: (row) =>
+                      row.timingsMs.total ? `${Math.round(row.timingsMs.total)} ms` : '—',
+                  },
+                  {
+                    key: 'thumbnailDataUrl',
+                    label: 'Thumbnail',
+                    render: (row) => (
+                      <Avatar
+                        variant="rounded"
+                        src={row.thumbnailDataUrl ?? undefined}
+                        alt="Capture thumbnail"
+                      >
+                        —
+                      </Avatar>
+                    ),
+                  },
+                ]
+              : [
+                  { key: 'key', label: 'Key' },
+                  { key: 'value', label: 'Value' },
+                  { key: 'type', label: 'Type' },
+                ];
   const metadata = db
     ? [
         ...Object.entries(db.settings).map(([key, value]) => ({
@@ -202,9 +230,14 @@ export function DatabasePage() {
         ...Object.entries(db)
           .filter(
             ([key]) =>
-              !['people', 'templates', 'attempts', 'identificationEvents', 'settings'].includes(
-                key,
-              ),
+              ![
+                'people',
+                'templates',
+                'attempts',
+                'identificationEvents',
+                'physicalTrials',
+                'settings',
+              ].includes(key),
           )
           .map(([key, value]) => ({ id: key, key, value, type: typeof value })),
       ]
@@ -292,6 +325,10 @@ export function DatabasePage() {
           />
           <Tab value="people" label={`People (${db?.people.length ?? 0})`} />
           <Tab value="templates" label={`Templates (${db?.templates.length ?? 0})`} />
+          <Tab
+            value="physicalTrials"
+            label={`Physical trials (${db?.physicalTrials?.length ?? 0})`}
+          />
           <Tab value="metadata" label="Settings & metadata" />
         </Tabs>
         {tab !== 'metadata' && (

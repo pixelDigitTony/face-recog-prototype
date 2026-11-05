@@ -16,7 +16,13 @@ async function prepare(page) {
       return stream;
     };
     window.Worker = class {
-      async postMessage({ requestId, type }) {
+      async postMessage({ requestId, id, type }) {
+        if (id) {
+          this.onmessage?.({
+            data: { id, ok: false, error: 'Motion unavailable in this evaluation-only fixture' },
+          });
+          return;
+        }
         let result = true;
         if (type === 'initialize')
           result = await (await fetch('/models/model-manifest.json')).json();

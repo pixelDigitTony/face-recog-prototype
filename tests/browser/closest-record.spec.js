@@ -20,7 +20,13 @@ test('each tracked face shows its own closest photo, inclusive green state and a
       return canvas.captureStream(10);
     };
     window.Worker = class {
-      async postMessage({ requestId, type, payload }) {
+      async postMessage({ requestId, id, type, payload }) {
+        if (id) {
+          this.onmessage?.({
+            data: { id, ok: false, error: 'Motion unavailable in this recognition-only fixture' },
+          });
+          return;
+        }
         let result = true;
         if (type === 'initialize')
           result = await (await fetch('/models/model-manifest.json')).json();

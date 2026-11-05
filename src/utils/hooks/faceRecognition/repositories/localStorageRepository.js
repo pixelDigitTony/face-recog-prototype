@@ -1,4 +1,6 @@
-import { ENROLLMENT_POLICY, MULTI_ENROLLMENT_POLICY } from '../liveness/livenessPolicy';
+import { validatePhysicalTrial } from './physicalTrial';
+import { LIVENESS_METER_POLICY } from '../liveness/livenessMeterPolicy';
+import { livenessDisabled } from '../liveness/livenessPolicy';
 import {
   evaluateTrial,
   validateEvaluationTrial,
@@ -60,6 +62,7 @@ export function createLocalStorageRepository({
     if (
       db.people.length > db.settings.maxPeople ||
       db.evaluationTrials.length > 100 ||
+      (db.physicalTrials?.length ?? 0) > 100 ||
       db.attempts.length + db.identificationEvents.length > db.settings.maxAttempts ||
       raw.length * 2 > db.settings.maxEstimatedBytes
     )
@@ -176,7 +179,7 @@ export function createLocalStorageRepository({
             ['MATCH', 'ENROLLED'].includes(operation.attempt.outcome) &&
             !(
               operation.attempt.purpose === 'enroll'
-                ? [ENROLLMENT_POLICY, MULTI_ENROLLMENT_POLICY]
+                ? [LIVENESS_METER_POLICY.enrollmentPolicy]
                 : ['live-85-strict-v1']
             ).includes(operation.attempt.decisionPolicyVersion)
           )
@@ -296,6 +299,7 @@ export function createLocalStorageRepository({
               fail('Enrollment changed. Capture again.', 'STALE_CONTEXT');
             if (db.templates.filter((t) => t.personId === personId).length + 3 > 5)
               fail('Three free sample slots are required.', 'CAPACITY_ERROR');
+            const sessionProof = ({ capture, ...proof }) => proof;
             for (const [index, { template, attempt }] of captures.entries()) {
               if (
                 !person.acknowledgedAt ||
@@ -303,21 +307,22 @@ export function createLocalStorageRepository({
                 attempt.templateVersion !== template.version ||
                 attempt.capturePose !== ['front', 'slight_left', 'slight_right'][index] ||
                 attempt.sessionId !== captures[0].attempt.sessionId ||
+                JSON.stringify(sessionProof(attempt.livenessMeter ?? {})) !==
+                  JSON.stringify(sessionProof(captures[0].attempt.livenessMeter ?? {})) ||
                 attempt.trackId !== captures[0].attempt.trackId ||
                 (index > 0 &&
                   attempt.decisionTimestamp <= captures[index - 1].attempt.decisionTimestamp) ||
                 template.enrollmentSource !== 'live_camera' ||
                 template.enrollmentLiveness !== attempt.livenessStatus ||
                 JSON.stringify(template.liveness) !== JSON.stringify(attempt.liveness) ||
+                JSON.stringify(template.livenessMeter) !== JSON.stringify(attempt.livenessMeter) ||
                 template.personId !== personId ||
                 attempt.personId !== personId ||
                 template.captureSetId !== captureSetId ||
                 attempt.captureSetId !== captureSetId ||
                 attempt.templateId !== template.id ||
                 attempt.outcome !== 'ENROLLED' ||
-                ![ENROLLMENT_POLICY, MULTI_ENROLLMENT_POLICY].includes(
-                  attempt.decisionPolicyVersion,
-                ) ||
+                ![LIVENESS_METER_POLICY.enrollmentPolicy].includes(attempt.decisionPolicyVersion) ||
                 attempt.decisionPolicyVersion !== captures[0].attempt.decisionPolicyVersion
               )
                 fail('Invalid guided capture evidence.');
@@ -329,6 +334,11 @@ export function createLocalStorageRepository({
             break;
           }
           case 'saveEnrollment': {
+            if (
+              JSON.stringify(operation.template.livenessMeter) !==
+              JSON.stringify(operation.attempt.livenessMeter)
+            )
+              fail('Sample motion evidence does not match capture.');
             const person = db.people.find((p) => p.id === operation.attempt.personId);
             const samples = db.templates.filter((t) => t.personId === person.id);
             if (
@@ -369,6 +379,25 @@ export function createLocalStorageRepository({
             person.updatedAt = now;
             break;
           }
+          case 'savePhysicalTrial': {
+            validatePhysicalTrial(operation.trial, context);
+            db.physicalTrials ??= [];
+            const prior = db.physicalTrials.find((trial) => trial.id === operation.trial.id);
+            if (prior) {
+              if (JSON.stringify(prior) !== JSON.stringify(operation.trial))
+                fail('Physical trial ID conflicts.');
+              return db;
+            }
+            if (db.physicalTrials.length >= 100)
+              fail('Physical trial limit reached.', 'CAPACITY_ERROR');
+            db.physicalTrials.push(structuredClone(operation.trial));
+            break;
+          }
+          case 'deletePhysicalTrial':
+            db.physicalTrials = (db.physicalTrials ?? []).filter(
+              (trial) => trial.id !== operation.id,
+            );
+            break;
           case 'saveEvaluation': {
             const prior = db.evaluationTrials.find((t) => t.id === operation.trial.id);
             if (prior) {
@@ -432,6 +461,12 @@ export function createLocalStorageRepository({
             );
             break;
           case 'settings':
+            if (
+              livenessDisabled(
+                operation.settings.enrollmentLiveness ?? db.settings.enrollmentLiveness,
+              )
+            )
+              fail('Enable at least one enrollment challenge in Settings');
             if (operation.settings.matchThreshold !== 0.85)
               fail('Live matching requires strictly above 85%.');
             db.settings = {

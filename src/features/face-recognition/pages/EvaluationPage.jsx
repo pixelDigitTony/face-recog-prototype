@@ -28,14 +28,24 @@ import {
 import { downloadJson } from '@/utils/hooks/faceRecognition/downloadJson';
 import { FaceOverlay } from '../components/FaceOverlay';
 import { ComparativeEvaluationWorkspace } from '../components/ComparativeEvaluationWorkspace';
+import { PhysicalEvaluationWorkspace } from '../components/PhysicalEvaluationWorkspace';
 
 const rate = (n, total) =>
   total ? `${n}/${total} (${((100 * n) / total).toFixed(1)}%)` : 'Unavailable (0 trials)';
 const score = (v) => (v == null ? '—' : `${(v * 100).toFixed(2)}%`);
 export function EvaluationPage() {
   const [view, setView] = useState('all');
-  const { evaluationWorkflow: flow } = useFaceServices();
+  const { evaluationWorkflow: flow, physicalEvaluationWorkflow: physical } = useFaceServices();
   const liveState = useSyncExternalStore(flow.subscribe, flow.getSnapshot, flow.getSnapshot);
+  const physicalState = useSyncExternalStore(
+    physical.subscribe,
+    physical.getSnapshot,
+    physical.getSnapshot,
+  );
+  useEffect(() => {
+    if (['review', 'saving', 'save_failed'].includes(physicalState.status) || physicalState.pending)
+      setView('physical');
+  }, [physicalState.status, physicalState.pending]);
   return (
     <Stack spacing={3}>
       <TextField
@@ -43,14 +53,26 @@ export function EvaluationPage() {
         label="Evaluation mode"
         value={view}
         disabled={
-          ['loading', 'capturing', 'saving'].includes(liveState.status) || !!liveState.pending
+          ['loading', 'capturing', 'saving'].includes(liveState.status) ||
+          !!liveState.pending ||
+          ['loading', 'ready', 'running', 'review', 'saving', 'save_failed'].includes(
+            physicalState.status,
+          ) ||
+          !!physicalState.pending
         }
         onChange={(e) => setView(e.target.value)}
       >
         <MenuItem value="all">All eligible samples</MenuItem>
         <MenuItem value="compare">Compare 1 / 3 / 5 samples</MenuItem>
+        <MenuItem value="physical">Physical camera and spoof trials</MenuItem>
       </TextField>
-      {view === 'all' ? <AllSamplesEvaluation /> : <ComparativeEvaluationWorkspace />}
+      {view === 'all' ? (
+        <AllSamplesEvaluation />
+      ) : view === 'compare' ? (
+        <ComparativeEvaluationWorkspace />
+      ) : (
+        <PhysicalEvaluationWorkspace />
+      )}
     </Stack>
   );
 }

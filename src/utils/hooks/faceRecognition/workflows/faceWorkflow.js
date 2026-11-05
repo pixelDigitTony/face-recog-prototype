@@ -1,3 +1,4 @@
+import { LIVENESS_METER_POLICY } from '../liveness/livenessMeterPolicy';
 import { ENROLLMENT_POLICY, MULTI_ENROLLMENT_POLICY } from '../liveness/livenessPolicy';
 import { cosineSimilarity } from '../recognition/cosineSimilarity';
 import { percentage, LIVE_POLICY, SCORE_MAPPING } from '../recognition/matchPolicy';
@@ -140,15 +141,18 @@ export function createFaceWorkflow({ repository, engine, context }) {
         scoreMappingVersion: SCORE_MAPPING,
         decisionPolicyVersion:
           prepared && purpose === 'enroll'
-            ? prepared.enrollmentPolicyVersion === MULTI_ENROLLMENT_POLICY
-              ? MULTI_ENROLLMENT_POLICY
-              : ENROLLMENT_POLICY
+            ? prepared.enrollmentPolicyVersion === LIVENESS_METER_POLICY.enrollmentPolicy
+              ? LIVENESS_METER_POLICY.enrollmentPolicy
+              : prepared.enrollmentPolicyVersion === MULTI_ENROLLMENT_POLICY
+                ? MULTI_ENROLLMENT_POLICY
+                : ENROLLMENT_POLICY
             : LIVE_POLICY,
         matchPercentage: percentage(similarity),
         percentageThresholdSnapshot: 85,
         comparisonOperator: '>',
         thresholdSnapshot: 0.85,
         liveness: prepared?.liveness ?? null,
+        livenessMeter: prepared?.livenessMeter ?? null,
       };
       const operation = {
         type: 'saveAttempt',
@@ -178,6 +182,7 @@ export function createFaceWorkflow({ repository, engine, context }) {
           enrollmentSource: prepared ? 'live_camera' : 'test_image',
           enrollmentLiveness: prepared?.liveness?.status ?? 'not_checked',
           liveness: prepared?.liveness ?? null,
+          livenessMeter: prepared?.livenessMeter ?? null,
         };
         attempt.templateId = newTemplate.id;
         attempt.templateVersion = newTemplate.version;

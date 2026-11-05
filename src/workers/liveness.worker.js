@@ -1,3 +1,25 @@
+function expressionMotionFeatures(points, width, height) {
+  if (
+    !Array.isArray(points) ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  )
+    return { jawMotion: null, smileMotion: null };
+  const distance = (a, b) => {
+    const x = points[a],
+      y = points[b];
+    if (!x || !y || ![x.x, x.y, x.z, y.x, y.y, y.z].every(Number.isFinite)) return null;
+    return Math.hypot((x.x - y.x) * width, (x.y - y.y) * height, (x.z - y.z) * width);
+  };
+  const scale = distance(33, 263),
+    jaw = distance(13, 14),
+    smile = distance(61, 291);
+  if (!scale || jaw === null || smile === null) return { jawMotion: null, smileMotion: null };
+  return { jawMotion: jaw / scale, smileMotion: smile / scale };
+}
+
 /* Classic worker: MediaPipe's WASM loader requires importScripts. Bundled by Vite. */
 let landmarker, manifest;
 async function verified(url, digest) {
@@ -31,7 +53,7 @@ self.onmessage = async ({ data: { id, type, payload } }) => {
         minFacePresenceConfidence: 0.7,
         minTrackingConfidence: 0.7,
         outputFacialTransformationMatrixes: true,
-        outputFaceBlendshapes: Boolean(payload.blink),
+        outputFaceBlendshapes: Boolean(payload.blink || payload.meter),
       });
       result = manifest;
     } else {
@@ -46,6 +68,10 @@ self.onmessage = async ({ data: { id, type, payload } }) => {
         if (!points || !matrix) return [];
         const xs = points.map((p) => p.x * frame.width),
           ys = points.map((p) => p.y * frame.height);
+        const value = (name) =>
+          output.faceBlendshapes?.[index]?.categories.find((c) => c.categoryName === name)?.score ??
+          null;
+        const motion = expressionMotionFeatures(points, frame.width, frame.height);
         return [
           {
             timestamp,
@@ -57,6 +83,11 @@ self.onmessage = async ({ data: { id, type, payload } }) => {
               output.faceBlendshapes?.[index]?.categories.find(
                 (c) => c.categoryName === 'eyeBlinkRight',
               )?.score ?? null,
+            jawOpen: value('jawOpen'),
+            mouthSmileLeft: value('mouthSmileLeft'),
+            mouthSmileRight: value('mouthSmileRight'),
+            ...motion,
+            pitch: (Math.atan2(matrix[6], matrix[10]) * 180) / Math.PI,
             yaw: (Math.atan2(-matrix[2], Math.hypot(matrix[0], matrix[1])) * 180) / Math.PI,
             box: [
               Math.min(...xs),

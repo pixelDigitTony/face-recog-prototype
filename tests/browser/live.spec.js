@@ -37,13 +37,28 @@ test('automatic enrollment saves once and the saved template matches with real S
               window.testPoseCalls++;
               const prompt =
                 document.querySelector('[data-testid="face-instruction"]')?.textContent || '';
+              const phase = performance.now() % 5000;
               const target = prompt.includes('head left')
                 ? 25
                 : prompt.includes('head right')
                   ? -25
-                  : 0;
+                  : phase > 1800 && phase < 2400
+                    ? 8
+                    : 0;
               this.yaw += Math.max(-12.5, Math.min(12.5, target - this.yaw));
-              result = { box, yaw: this.yaw };
+              const eye = phase > 3200 && phase < 3400 ? 1 : 0;
+              result = {
+                box,
+                yaw: this.yaw,
+                pitch: 0,
+                eyeBlinkLeft: eye,
+                eyeBlinkRight: eye,
+                jawOpen: 0,
+                mouthSmileLeft: 0,
+                mouthSmileRight: 0,
+                jawMotion: 0.1,
+                smileMotion: 0.65,
+              };
             }
             this.onmessage?.({ data: { id, ok: true, result } });
           }, 0);
@@ -62,8 +77,8 @@ test('automatic enrollment saves once and the saved template matches with real S
         const ctx = canvas.getContext('2d'),
           paint = () => ctx.drawImage(image, 0, 0, 512, 512);
         paint();
-        setInterval(paint, 100);
-        return canvas.captureStream(10);
+        setInterval(paint, 33);
+        return canvas.captureStream(30);
       };
     },
     { box: reference.records['lena.jpg'].box },
@@ -82,7 +97,7 @@ test('automatic enrollment saves once and the saved template matches with real S
   await expect
     .poll(() => page.evaluate(() => window.testAnalysisCalls), { timeout: 10000 })
     .toBeGreaterThan(before.frames + 6);
-  expect(await page.evaluate(() => window.testPoseCalls)).toBe(before.poses);
+  expect(await page.evaluate(() => window.testPoseCalls)).toBeGreaterThan(before.poses);
   await page.screenshot({ path: '.local/enrollment-automatic-completed.png', fullPage: true });
   await page.getByRole('link', { name: 'Scan face', exact: true }).first().click();
   await expect(page.getByRole('combobox')).toHaveCount(0);
@@ -228,7 +243,9 @@ test('missing liveness model blocks named enrollment explicitly', async ({ page 
   await name.fill('Missing Model');
   await name.press('Enter');
   await expect(
-    page.getByText(/Missing liveness asset|Missing liveness model|Missing model:/),
+    page.getByRole('alert').filter({
+      hasText: /Liveness unavailable|Missing liveness asset|Missing liveness model|Missing model:/,
+    }),
   ).toBeVisible({
     timeout: 90000,
   });

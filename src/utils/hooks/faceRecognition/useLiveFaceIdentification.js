@@ -8,6 +8,7 @@ export function useLiveFaceIdentification() {
   const camera = useCamera(),
     cameraRef = useRef(camera),
     scheduler = useRef(),
+    poseScheduler = useRef(),
     generation = useRef(0);
   cameraRef.current = camera;
   const state = useSyncExternalStore(
@@ -19,6 +20,8 @@ export function useLiveFaceIdentification() {
   function stop() {
     generation.current++;
     scheduler.current?.stop();
+    poseScheduler.current?.stop();
+    poseScheduler.current = null;
     scheduler.current = null;
     cameraRef.current.stop();
     workflow.stop();
@@ -50,6 +53,16 @@ export function useLiveFaceIdentification() {
         },
       );
       scheduler.current.start();
+      poseScheduler.current = createFrameScheduler(
+        cameraRef.current.videoRef.current,
+        async () => {
+          const timestamp = performance.now();
+          await workflow.observePose(await cameraRef.current.capture(), timestamp);
+        },
+        () => {},
+        50,
+      );
+      poseScheduler.current.start();
     } catch (error) {
       if (token === generation.current) {
         stop();
@@ -75,16 +88,17 @@ export function useLiveFaceIdentification() {
   }, [workflow]);
   useEffect(() => {
     if (camera.error) {
-      scheduler.current?.stop();
-      scheduler.current = null;
-      cameraRef.current.stop();
+      stop();
       workflow.fail(new Error(camera.error));
     }
   }, [camera.error, workflow]);
   useEffect(() => {
     if (state.status === 'error') {
+      generation.current++;
       scheduler.current?.stop();
+      poseScheduler.current?.stop();
       scheduler.current = null;
+      poseScheduler.current = null;
       cameraRef.current.stop();
       setStarting(false);
     }

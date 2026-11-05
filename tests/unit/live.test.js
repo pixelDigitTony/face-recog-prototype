@@ -14,6 +14,7 @@ import { migrateDatabase } from '@/utils/hooks/faceRecognition/repositories/migr
 import { createLiveFaceWorkflow } from '@/utils/hooks/faceRecognition/workflows/liveFaceWorkflow';
 import { createFaceWorkflow } from '@/utils/hooks/faceRecognition/workflows/faceWorkflow';
 import { createLocalStorageRepository } from '@/utils/hooks/faceRecognition/repositories/localStorageRepository';
+import { harness, bind, perform, fixtureFaces, vector } from './enrollmentFixtures';
 
 const scope = { environment: 'test', companyId: 'company', storeId: null };
 const embedding = Array(128).fill(1 / Math.sqrt(128));
@@ -331,52 +332,215 @@ async function completeMotion(h, neutral = 0) {
     previousYaw = yaw;
   }
 }
-async function readyEnrollment() {
-  const h = await liveHarness({ purpose: 'enroll' });
-  await completeMotion(h);
-  for (let i = 0; i < 4 && h.live.getSnapshot().status !== 'ready_to_enroll'; i++) await h.step(0);
-  expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
+// Migration mapping: the retired manual-ready tests now exercise automatic capture,
+// quality/pose and consistency holds, continuous-session retention, loss, and history.
+// Multi-face isolation and independent failed-save retry are additionally covered in
+// multiEnrollmentCapture.test.js; sealed-review retention is in guidedMeterEnrollment.test.js.
+async function gatedEnrollment() {
+  const h = await harness();
+  await bind(h, 1, 'Alice');
+  await h.wait(1450);
+  h.yaw[0] = 8;
+  await h.wait(500);
+  h.yaw[0] = 0;
+  await h.wait(500);
+  h.eye[0] = 1;
+  await h.wait(150);
+  // Finish the blink while outside the capture pose so both checks can latch
+  // without allowing the automatic capture hold to complete.
+  h.eye[0] = 0;
+  await h.wait(200);
+  h.yaw[0] = 15;
+  await h.wait(600);
+  expect(h.flow.getSnapshot().sessions[0].liveness.status).toBe('passed_basic');
+  expect(h.flow.getSnapshot().sessions[0].meter.status).toBe('passed_basic');
+  expect(h.repository.getSnapshot().database.attempts).toHaveLength(0);
   return h;
 }
 
-describe('live session orchestration', () => {
-  it('retains completed enrollment readiness with advisory lighting warnings', async () => {
-    const h = await readyEnrollment();
-    const warningFace = {
-      ...face,
+describe('current per-face enrollment orchestration', () => {
+  it('rejects legacy enrollment with a clear per-face workflow direction', async () => {
+    await expect(liveHarness({ purpose: 'enroll' })).rejects.toThrow(
+      /per-face enrollment workflow.*motion evidence/i,
+    );
+  });
+  it('waits indefinitely for motion and preserves passed challenge steps while the meter remains incomplete', async () => {
+    const h = await harness();
+    await bind(h, 1, 'Alice');
+    await h.wait(12000);
+    expect(h.repository.getSnapshot().database.attempts).toHaveLength(0);
+    expect(h.flow.getSnapshot().sessions[0].liveness.status).toBe('checking');
+    h.eye[0] = 1;
+    await h.wait(150);
+    h.eye[0] = 0;
+    await h.wait(400);
+    const passed = structuredClone(h.flow.getSnapshot().sessions[0].liveness);
+    expect(passed.status).toBe('passed_basic');
+    await h.wait(12000);
+    const current = h.flow.getSnapshot().sessions[0];
+    expect(current.liveness.steps).toEqual(passed.steps);
+    expect(current.liveness.challengeId).toBe(passed.challengeId);
+    expect(current.meter.status).not.toBe('passed_basic');
+    expect(h.repository.getSnapshot().database.attempts).toHaveLength(0);
+  });
+  it('latches both checks during quiet and out-of-pose frames, then captures once with advisory lighting', async () => {
+    const h = await gatedEnrollment();
+    const session = h.flow.getSnapshot().sessions[0];
+    const proof = structuredClone(session.meter.accepted);
+    const steps = structuredClone(session.liveness.steps);
+    const warning = {
+      ...fixtureFaces[0],
       quality: { lighting: { warnings: ['LOW_LIGHT', 'UNEVEN_LIGHTING'] } },
     };
-    for (let i = 0; i < 8; i++) await h.step(0, [warningFace]);
-    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
-    expect(h.live.getSnapshot().liveness.status).toBe('passed_basic');
-    await h.live.enroll();
-    await h.step(0, [warningFace]);
-    expect(h.repo.getSnapshot().database.attempts.at(-1)?.outcome).toBe('ENROLLED');
-    h.repo.dispose();
+    h.faces([warning, fixtureFaces[1]]);
+    await h.wait(12000);
+    expect(h.flow.getSnapshot().sessions[0].meter.accepted).toEqual(proof);
+    expect(h.flow.getSnapshot().sessions[0].liveness.steps).toEqual(steps);
+    expect(h.repository.getSnapshot().database.attempts).toHaveLength(0);
+    h.yaw[0] = 0;
+    await h.wait(1500);
+    const attempts = h.repository.getSnapshot().database.attempts;
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      outcome: 'ENROLLED',
+      livenessStatus: 'passed_basic',
+      livenessMeter: { status: 'passed_basic' },
+    });
+    await h.wait(2500);
+    expect(h.repository.getSnapshot().database.attempts).toHaveLength(1);
   });
-  it('uses the challenge neutral pose consistently for the completed capture', async () => {
-    const h = await liveHarness({ purpose: 'enroll' });
-    await completeMotion(h, 8);
-    for (let i = 0; i < 4; i++) await h.step(16);
-    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
-    await h.live.enroll();
-    await h.step(16);
-    expect(h.repo.getSnapshot().database.attempts.at(-1)?.outcome).toBe('ENROLLED');
+  it('captures relative to a nonzero challenge neutral pose', async () => {
+    const h = await harness();
+    await bind(h, 1, 'Alice');
+    h.yaw[0] = 7;
+    await h.wait(1450);
+    h.yaw[0] = 15;
+    await h.wait(500);
+    h.yaw[0] = 7;
+    await h.wait(500);
+    h.eye[0] = 1;
+    await h.wait(150);
+    h.eye[0] = 0;
+    await h.wait(1500);
+    const attempts = h.repository.getSnapshot().database.attempts;
+    expect(attempts).toHaveLength(1);
+    const attempt = attempts[0];
+    expect(attempt.outcome).toBe('ENROLLED');
+    expect(attempt.neutralYaw).toBeCloseTo(7);
+    expect(attempt.captureYaw).toBeCloseTo(7);
+    expect(Math.abs(attempt.captureYaw - attempt.neutralYaw)).toBeLessThanOrEqual(10);
+    expect(attempt.liveness.status).toBe('passed_basic');
+    expect(attempt.livenessMeter.status).toBe('passed_basic');
+    expect(attempt.livenessMeter.events.map((event) => event.family)).toEqual(
+      expect.arrayContaining(['blink', 'head']),
+    );
   });
-  it('stops continuous pose/identity verification once enrollment is ready', async () => {
-    const h = await readyEnrollment();
-    const poseCalls = h.liveness.observe.mock.calls.length;
-    h.setEmbedding(embedding.map((v) => -v));
-    for (let i = 0; i < 12; i++)
-      await h.step(15, [{ ...face, reasonCode: i % 2 ? 'BLURRED_FACE' : null }]);
-    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
-    expect(h.liveness.observe).toHaveBeenCalledTimes(poseCalls);
-    expect(
-      h.engine.analyzeFrame.mock.calls
-        .slice(-12)
-        .every(([, options]) => options.includeEmbedding === false),
-    ).toBe(true);
+  it('keeps enrollment checks ready when transient activity goes idle', async () => {
+    const h = await gatedEnrollment();
+    const before = structuredClone(h.flow.getSnapshot().sessions[0]);
+    expect(before.meter.activity.score).toBeGreaterThan(0);
+    await h.wait(16000);
+    const after = h.flow.getSnapshot().sessions[0];
+    expect(after.meter.activity).toMatchObject({ score: 0, idle: true });
+    expect(after.meter.status).toBe('passed_basic');
+    expect(after.meter.accepted).toEqual(before.meter.accepted);
+    expect(after.liveness.status).toBe('passed_basic');
+    expect(h.repository.getSnapshot().database.attempts).toHaveLength(0);
+    h.yaw[0] = 0;
+    await h.wait(1500);
+    expect(h.repository.getSnapshot().database.attempts).toHaveLength(1);
   });
+  it('blocks poor capture quality, retains same-face proof, and captures after quality recovers', async () => {
+    const h = await gatedEnrollment();
+    const before = structuredClone(h.flow.getSnapshot().sessions[0]);
+    h.yaw[0] = 0;
+    h.faces([{ ...fixtureFaces[0], reasonCode: 'BLURRED_FACE' }, fixtureFaces[1]]);
+    await h.wait(1200);
+    expect(h.repository.getSnapshot().database.attempts).toHaveLength(0);
+    expect(h.flow.getSnapshot().sessions[0].liveness.steps).toEqual(before.liveness.steps);
+    expect(h.flow.getSnapshot().sessions[0].meter.accepted).toEqual(before.meter.accepted);
+    h.faces(fixtureFaces);
+    await h.wait(1500);
+    expect(h.repository.getSnapshot().database.attempts).toHaveLength(1);
+  });
+  it('rejects an inconsistent capture embedding and retains both passed checks for retry', async () => {
+    const h = await gatedEnrollment();
+    const before = structuredClone(h.flow.getSnapshot().sessions[0]);
+    h.yaw[0] = 0;
+    await h.wait(700);
+    h.setEmbedding(0, vector(1));
+    await h.wait(400);
+    expect(h.repository.getSnapshot().database.attempts).toHaveLength(0);
+    const blocked = h.flow.getSnapshot().sessions[0];
+    expect(blocked.error).toMatch(/consistent capture/i);
+    expect(blocked.liveness.steps).toEqual(before.liveness.steps);
+    expect(blocked.meter.accepted).toEqual(before.meter.accepted);
+    h.setEmbedding(0, vector(0));
+    await h.wait(1200);
+    expect(h.repository.getSnapshot().database.attempts).toHaveLength(1);
+  });
+  it('does not transfer accepted meter evidence through a missed detection or stale stream', async () => {
+    const h = await gatedEnrollment();
+    const challenge = structuredClone(h.flow.getSnapshot().sessions[0].liveness);
+    h.faces([fixtureFaces[1]]);
+    await h.step();
+    h.faces(fixtureFaces);
+    await h.step();
+    const returned = h.flow.getSnapshot().sessions[0];
+    expect(returned.meter.accepted).toBeNull();
+    expect(returned.liveness.steps).toEqual(challenge.steps);
+    h.advance(5100);
+    h.flow.stale();
+    expect(h.flow.getSnapshot().sessions[0].status).toBe('cancelled');
+    expect(h.repository.getSnapshot().database.attempts).toHaveLength(0);
+  });
+  it('keeps a named face independent when a second face is present', async () => {
+    const h = await gatedEnrollment();
+    expect(h.flow.getSnapshot().faces).toHaveLength(2);
+    h.yaw[0] = 0;
+    await h.wait(1500);
+    const attempts = h.repository.getSnapshot().database.attempts;
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      trackId: 1,
+      faceCountAtDecision: 2,
+      targetFaceCountAtDecision: 1,
+    });
+  });
+  it('validates capture continuity and session bindings on the real stored record', async () => {
+    const h = await harness();
+    await bind(h, 1, 'Alice');
+    await perform(h, [1]);
+    const db = h.repository.getSnapshot().database;
+    expect(db.attempts).toHaveLength(1);
+    expect(() => validateDatabase(db, scope)).not.toThrow();
+    for (const corrupt of [
+      (a) => (a.liveness.sessionId = 'another-session'),
+      (a) => (a.liveness.trackId = 999),
+      (a) => (a.livenessMeter.capture.poseTimestamp = a.decisionTimestamp - 1600),
+    ]) {
+      const forged = structuredClone(db);
+      corrupt(forged.attempts[0]);
+      expect(() => validateDatabase(forged, scope)).toThrow();
+    }
+  });
+  it('preserves historical timed challenge validation', async () => {
+    const h = await liveHarness();
+    await completeMotion(h);
+    for (let i = 0; i < 12; i++) await h.step(0);
+    const db = structuredClone(h.repo.getSnapshot().database);
+    const attempt = db.attempts.at(-1);
+    expect(attempt.outcome).toBe('MATCH');
+    attempt.liveness.policyVersion = 'head-turn-v1';
+    attempt.liveness.expiresAt = attempt.liveness.passedAt + 5000;
+    attempt.decisionTimestamp = attempt.liveness.passedAt + 100;
+    expect(() => validateDatabase(db, scope)).not.toThrow();
+    attempt.decisionTimestamp = attempt.liveness.expiresAt + 1;
+    expect(() => validateDatabase(db, scope)).toThrow(/expired/);
+  });
+});
+
+describe('live session orchestration', () => {
   it('matches the saved template without an unrelated before/after challenge similarity gate', async () => {
     const h = await liveHarness();
     const side = embedding.map((v, i) => (i < 64 ? v : -v));
@@ -395,171 +559,6 @@ describe('live session orchestration', () => {
     for (let i = 0; i < 12; i++) await h.step(0);
     expect(h.repo.getSnapshot().database.attempts.at(-1)?.outcome).toBe('NO_MATCH');
     expect(h.repo.getSnapshot().database.attempts.at(-1)?.similarity).toBeCloseTo(0.8, 5);
-  });
-  it('waits for the first instruction without timing out while the same face remains visible', async () => {
-    const h = await liveHarness({ purpose: 'enroll' });
-    for (let i = 0; i < 400; i++) await h.step(15);
-    expect(h.repo.getSnapshot().database.attempts).toHaveLength(0);
-    expect(h.live.getSnapshot().status).toBe('challenging');
-    for (let i = 0; i < 10; i++) await h.step(0);
-    expect(h.live.getSnapshot().liveness.challengeId).toBeTruthy();
-  });
-  it('retains a completed enrollment challenge beyond both old reset deadlines', async () => {
-    const h = await readyEnrollment();
-    const passed = structuredClone(h.live.getSnapshot().liveness);
-    for (let i = 0; i < 800; i++) await h.step(0);
-    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
-    expect(h.live.getSnapshot().liveness.challengeId).toBe(passed.challengeId);
-    expect(h.live.getSnapshot().liveness.steps).toEqual(passed.steps);
-    expect(h.repo.getSnapshot().database.attempts).toHaveLength(0);
-    await h.live.enroll();
-    for (let i = 0; i < 5; i++) await h.step(0);
-    expect(h.repo.getSnapshot().database.attempts.at(-1)).toMatchObject({
-      outcome: 'ENROLLED',
-      livenessStatus: 'passed_basic',
-      liveness: { validity: 'continuous_session', expiresAt: null },
-    });
-  });
-  it('retains passed steps when the same face follows the wrong instruction or takes longer', async () => {
-    const h = await liveHarness({ purpose: 'enroll' });
-    for (let i = 0; i < 10 && !h.live.getSnapshot().liveness.challengeId; i++) await h.step(0);
-    const initial = h.live.getSnapshot().liveness;
-    const firstYaw = initial.steps[0].direction === 'left' ? 25 : -25;
-    await h.step(firstYaw / 2);
-    for (let i = 0; i < 6 && h.live.getSnapshot().liveness.step === 0; i++) await h.step(firstYaw);
-    expect(h.live.getSnapshot().liveness.step).toBe(1);
-    const completed = structuredClone(h.live.getSnapshot().liveness.steps[0]);
-    for (let i = 0; i < 400; i++) await h.step(firstYaw);
-    expect(h.live.getSnapshot().liveness.step).toBe(1);
-    expect(h.live.getSnapshot().liveness.steps[0]).toEqual(completed);
-    expect(h.live.getSnapshot().liveness.challengeId).toBe(initial.challengeId);
-    expect(h.repo.getSnapshot().database.attempts).toHaveLength(0);
-    await h.step(firstYaw / 2);
-    for (let i = 0; i < 4; i++) await h.step(0);
-    expect(h.live.getSnapshot().liveness.step).toBe(2);
-  });
-  it('keeps enrollment ready across detection-only frames after a completed challenge', async () => {
-    const h = await liveHarness({ purpose: 'enroll' });
-    await completeMotion(h);
-    for (let i = 0; i < 4 && h.live.getSnapshot().status !== 'ready_to_enroll'; i++)
-      await h.step(0);
-    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
-    const states = [];
-    const unsubscribe = h.live.subscribe(() => states.push(h.live.getSnapshot().status));
-    for (let i = 0; i < 5; i++) await h.step(0);
-    unsubscribe();
-    expect(new Set(states)).toEqual(new Set(['ready_to_enroll']));
-    expect(h.repo.getSnapshot().database.attempts).toHaveLength(0);
-  });
-  it('latches the enrollment click until a fresh capture saves once', async () => {
-    const h = await readyEnrollment();
-    await h.live.enroll();
-    expect(h.live.getSnapshot().status).toBe('capturing_enrollment');
-    await expect(h.live.enroll()).rejects.toThrow();
-    const states = [];
-    const unsubscribe = h.live.subscribe(() => states.push(h.live.getSnapshot().status));
-    for (let i = 0; i < 5; i++) await h.step(0);
-    unsubscribe();
-    expect(states).not.toContain('ready_to_enroll');
-    expect(states).not.toContain('comparing');
-    const attempts = h.repo.getSnapshot().database.attempts;
-    expect(attempts).toHaveLength(1);
-    expect(attempts[0].outcome).toBe('ENROLLED');
-    expect(h.live.getSnapshot().status).toBe('completed');
-  });
-  it('revokes a queued enrollment if another face enters before capture', async () => {
-    const h = await readyEnrollment();
-    await h.live.enroll();
-    await h.step(0, [face, { ...face, box: [300, 20, 100, 120] }]);
-    expect(h.live.getSnapshot().status).toBe('multiple_faces');
-    expect(h.repo.getSnapshot().database.attempts).toHaveLength(0);
-    await expect(h.live.enroll()).rejects.toThrow();
-  });
-  it('checks pose only on capture while actual lost tracking disables enrollment', async () => {
-    const turned = await readyEnrollment();
-    const completed = structuredClone(turned.live.getSnapshot().liveness);
-    await turned.step(15);
-    expect(turned.live.getSnapshot().status).toBe('ready_to_enroll');
-    await turned.live.enroll();
-    await turned.step(15);
-    expect(turned.live.getSnapshot().status).toBe('ready_to_enroll');
-    expect(turned.live.getSnapshot().error).toMatch(/Face forward for capture/);
-    expect(turned.repo.getSnapshot().database.attempts).toHaveLength(0);
-    for (let i = 0; i < 60; i++) await turned.step(15);
-    expect(turned.live.getSnapshot().liveness.challengeId).toBe(completed.challengeId);
-    expect(turned.live.getSnapshot().liveness.steps).toEqual(completed.steps);
-    for (let i = 0; i < 4; i++) await turned.step(0);
-    expect(turned.live.getSnapshot().status).toBe('ready_to_enroll');
-    const expired = await readyEnrollment();
-    expired.advance(5100);
-    await expired.step(0);
-    expect(expired.live.getSnapshot().status).not.toBe('ready_to_enroll');
-    await expect(expired.live.enroll()).rejects.toThrow();
-    expect(expired.repo.getSnapshot().database.attempts.some((a) => a.outcome === 'ENROLLED')).toBe(
-      false,
-    );
-  });
-  it('preserves steps through temporary quality failures and a brief missed detection for the same track', async () => {
-    const h = await readyEnrollment();
-    const completed = structuredClone(h.live.getSnapshot().liveness);
-    await h.step(0, [{ ...face, reasonCode: 'BLURRED_FACE' }]);
-    expect(h.live.getSnapshot().liveness.steps).toEqual(completed.steps);
-    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
-    await h.live.enroll();
-    await h.step(0, [{ ...face, reasonCode: 'BLURRED_FACE' }]);
-    expect(h.live.getSnapshot().error).toMatch(/Capture quality/);
-    expect(h.repo.getSnapshot().database.attempts).toHaveLength(0);
-    await h.step(0, []);
-    expect(h.live.getSnapshot().liveness.steps).toEqual(completed.steps);
-    for (let i = 0; i < 4; i++) await h.step(0);
-    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
-    expect(h.live.getSnapshot().liveness.challengeId).toBe(completed.challengeId);
-  });
-  it('validates capture identity on click and retains readiness after a failed capture', async () => {
-    const h = await readyEnrollment(),
-      passed = structuredClone(h.live.getSnapshot().liveness);
-    h.setEmbedding(embedding.map((v) => -v));
-    for (let i = 0; i < 3; i++) await h.step(0);
-    expect(h.live.getSnapshot().liveness.steps).toEqual(passed.steps);
-    expect(h.live.getSnapshot().liveness.challengeId).toBe(passed.challengeId);
-    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
-    await h.live.enroll();
-    await h.step(0);
-    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
-    expect(h.live.getSnapshot().error).toMatch(/capture differs/);
-    expect(h.repo.getSnapshot().database.attempts).toHaveLength(0);
-    h.setEmbedding(embedding);
-    for (let i = 0; i < 4; i++) await h.step(0);
-    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
-    expect(h.live.getSnapshot().liveness.challengeId).toBe(passed.challengeId);
-    await h.live.enroll();
-    await h.step(0);
-    expect(h.repo.getSnapshot().database.attempts.at(-1)?.outcome).toBe('ENROLLED');
-  });
-  it('validates fresh session binding for retained completion and preserves old timed records', async () => {
-    const h = await readyEnrollment();
-    await h.live.enroll();
-    for (let i = 0; i < 4; i++) await h.step(0);
-    const original = h.repo.getSnapshot().database;
-    expect(original.attempts.at(-1).outcome).toBe('ENROLLED');
-    for (const corrupt of [
-      (a) => (a.liveness.lastValidatedAt = a.decisionTimestamp - 1600),
-      (a) => (a.liveness.sessionId = 'another-session'),
-      (a) => (a.liveness.trackId = 999),
-    ]) {
-      const db = structuredClone(original);
-      corrupt(db.attempts.at(-1));
-      expect(() => validateDatabase(db, scope)).toThrow(/liveness evidence/i);
-    }
-    const legacy = structuredClone(original),
-      attempt = legacy.attempts.at(-1);
-    attempt.decisionPolicyVersion = 'live-85-strict-v1';
-    attempt.liveness.policyVersion = 'head-turn-v1';
-    attempt.liveness.expiresAt = attempt.liveness.passedAt + 5000;
-    attempt.decisionTimestamp = attempt.liveness.passedAt + 100;
-    expect(() => validateDatabase(legacy, scope)).not.toThrow();
-    attempt.decisionTimestamp = attempt.liveness.expiresAt + 1;
-    expect(() => validateDatabase(legacy, scope)).toThrow(/expired/);
   });
   it.each([
     { recognitionMs: 411, poseMs: 25 },

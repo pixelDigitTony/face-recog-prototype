@@ -9,7 +9,12 @@ export function ScanResult({ workflow }) {
   const [details, setDetails] = useState(null);
   const result = workflow.result;
   return (
-    <Stack spacing={2} role="status" aria-live="polite">
+    <Stack
+      spacing={2}
+      role="status"
+      aria-live="polite"
+      sx={{ minWidth: 0, overflowWrap: 'anywhere' }}
+    >
       {workflow.error && <Alert severity="error">{workflow.error}</Alert>}
       {!result ? (
         <Box sx={{ py: 4, textAlign: 'center' }}>
@@ -46,10 +51,17 @@ export function ScanResult({ workflow }) {
             {result.purpose === 'enroll' ? 'Enrollment' : 'Verification'}
           </Typography>
           <Typography variant="body2">
-            Liveness: {livenessLabel(result.liveness ?? { status: result.livenessStatus })}
+            Enrollment challenge:{' '}
+            {livenessLabel(result.liveness ?? { status: result.livenessStatus })}
+          </Typography>
+          <Typography variant="body2">
+            Motion evidence:{' '}
+            {result.livenessMeter
+              ? `${Math.round(result.livenessMeter.acceptedScore)}% - Basic motion checks met`
+              : 'Not recorded'}
           </Typography>
           <Divider />
-          <Stack direction="row" spacing={4}>
+          <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
             <Box>
               <Typography variant="caption" color="text.secondary">
                 Match similarity

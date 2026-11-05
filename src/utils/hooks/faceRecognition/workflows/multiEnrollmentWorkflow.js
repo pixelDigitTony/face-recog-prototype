@@ -1,12 +1,14 @@
 import { createFaceTracker, boxIoU } from '../recognition/faceTracker';
 import { createEnrollmentDiscovery } from '../recognition/enrollmentDiscovery';
 import { createActiveChallenge } from '../liveness/activeChallenge';
+import { createLivenessMeter } from '../liveness/livenessMeter';
+import { LIVENESS_METER_POLICY } from '../liveness/livenessMeterPolicy';
 import { associateFacePoses } from '../liveness/associateFacePoses';
 import {
   DEFAULT_LIVENESS,
   CHALLENGE_POLICY,
-  MULTI_ENROLLMENT_POLICY,
   challengeReady,
+  livenessDisabled,
 } from '../liveness/livenessPolicy';
 import { cosineSimilarity } from '../recognition/cosineSimilarity';
 import { thumbnail } from '../recognition/imageQuality';
@@ -27,13 +29,16 @@ export function createMultiEnrollmentWorkflow({
   repository,
   engine,
   liveness,
+  meterFactory = createLivenessMeter,
   workflow,
   context,
   now = () => performance.now(),
 }) {
   const listeners = new Set(),
     tracker = createFaceTracker(),
-    sessions = new Map();
+    sessions = new Map(),
+    previewMeters = new Map(),
+    invalidatedTracks = new Set();
   const discovery = createEnrollmentDiscovery({ repository, engine, context, now });
   let state = {
     status: 'idle',
@@ -54,10 +59,38 @@ export function createMultiEnrollmentWorkflow({
     lastComparison = -Infinity,
     lastFrameAt = null,
     faces = [],
-    poses = new Map();
+    poses = new Map(),
+    poseSequence = 0,
+    meterAvailable = false,
+    meterGeneration = 0,
+    clockOffset = 0,
+    trackOffset = 0;
+  function invalidateTrack(id) {
+    invalidatedTracks.add(id);
+    if (invalidatedTracks.size > 200)
+      invalidatedTracks.delete(invalidatedTracks.values().next().value);
+  }
   const publish = (patch) => {
     state = { ...state, ...patch };
     listeners.forEach((fn) => fn());
+  };
+  const meterView = (meter) => {
+    const value = meter.snapshot();
+    return {
+      ...value,
+      acceptedAt: value.accepted
+        ? new Date(clockOffset + value.accepted.passedAt).toISOString()
+        : null,
+    };
+  };
+  const sessionMeterView = (session) => {
+    const value = meterView(session.meter);
+    if (terminal(session.status) && !session.detached) {
+      const live = previewMeters.get(session.trackId)?.snapshot();
+      if (live?.activity) value.activity = live.activity;
+      if (!meterAvailable) value.status = 'unavailable';
+    }
+    return value;
   };
   const view = (session) => ({
     trackId: session.trackId,
@@ -67,13 +100,21 @@ export function createMultiEnrollmentWorkflow({
     active: !terminal(session.status),
     liveness: {
       ...session.challenge.snapshot(),
-      ...(challengeReady(session.challenge.snapshot()) ? { prompt: capturePrompt(session) } : {}),
+      ...(challengeReady(session.challenge.snapshot())
+        ? {
+            prompt:
+              session.meter.snapshot().status === 'passed_basic'
+                ? capturePrompt(session)
+                : 'Enrollment challenge complete',
+          }
+        : {}),
     },
+    meter: sessionMeterView(session),
     guided: session.guided,
     stage: session.captures.length,
     review: session.review ?? null,
     result: session.result ?? null,
-    visible: faces.some((face) => face.trackId === session.trackId),
+    visible: !session.detached && faces.some((face) => face.trackId === session.trackId),
   });
   function display(patch = {}) {
     const analyses = new Map(discovery.all().map((item) => [item.trackId, item]));
@@ -87,7 +128,22 @@ export function createMultiEnrollmentWorkflow({
         similarity: null,
         closestCandidate: null,
       },
-      enrollment: sessions.has(face.trackId) ? view(sessions.get(face.trackId)) : null,
+      meter:
+        sessions.has(face.trackId) && !sessions.get(face.trackId).detached
+          ? sessionMeterView(sessions.get(face.trackId))
+          : previewMeters.has(face.trackId)
+            ? meterView(previewMeters.get(face.trackId))
+            : {
+                status: !meterAvailable
+                  ? 'unavailable'
+                  : invalidatedTracks.has(face.trackId)
+                    ? 'invalidated'
+                    : 'initializing',
+              },
+      enrollment:
+        sessions.has(face.trackId) && !sessions.get(face.trackId).detached
+          ? view(sessions.get(face.trackId))
+          : null,
     }));
     const active = [...sessions.values()].filter((s) => !terminal(s.status));
     publish({
@@ -96,7 +152,7 @@ export function createMultiEnrollmentWorkflow({
       sessions: [...sessions.values()].map(view),
       discovery: faces.length === 1 ? visible[0]?.discovery : null,
       similarity: faces.length === 1 ? visible[0]?.identification.similarity : null,
-      needsIndependentPose: active.some((s) => s.settings.enrollmentLiveness.blink),
+      needsIndependentPose: meterAvailable,
       enrollmentPerson:
         faces.length === 1 ? (sessions.get(faces[0].trackId)?.person ?? null) : null,
       liveness:
@@ -149,7 +205,15 @@ export function createMultiEnrollmentWorkflow({
       cancelSession(s, 'Enrollment changed. Confirm this face again.');
       return;
     }
-    if (now() - timestamp > 1500) {
+    if (
+      now() - timestamp > 1500 ||
+      now() - association.pose.timestamp > 1500 ||
+      !faces.some(
+        (current) => current.trackId === s.trackId && !current.ambiguous && !current.reasonCode,
+      ) ||
+      s.meter.snapshot().status !== 'passed_basic' ||
+      (liveness.generation != null && liveness.generation !== meterGeneration)
+    ) {
       s.candidate = null;
       s.status = 'preparing_enrollment';
       return;
@@ -162,7 +226,16 @@ export function createMultiEnrollmentWorkflow({
       replaceTemplateId: s.replaceTemplateId,
       sampleLabel: s.sampleLabel,
       sessionId: s.id,
-      enrollmentPolicyVersion: MULTI_ENROLLMENT_POLICY,
+      enrollmentPolicyVersion: LIVENESS_METER_POLICY.enrollmentPolicy,
+      livenessMeter: {
+        ...s.meter.snapshot().accepted,
+        capture: {
+          captureTimestamp: timestamp,
+          poseTimestamp: association.pose.timestamp,
+          decisionTimestamp: now(),
+          exclusive: true,
+        },
+      },
       similarity: null,
       extracted: {
         embedding: [...embedding],
@@ -183,6 +256,8 @@ export function createMultiEnrollmentWorkflow({
         assetIdentity: liveness.manifest?.sha256 ?? null,
       },
       metadata: {
+        cameraSessionId: state.sessionId,
+        workerGeneration: meterGeneration,
         captureConsistency: consistency,
         captureYaw: association.pose.yaw,
         neutralYaw: live.neutralYaw ?? 0,
@@ -191,7 +266,7 @@ export function createMultiEnrollmentWorkflow({
         faceCountAtDecision: faces.length,
         targetFaceCountAtDecision: 1,
         maxFaceCountObserved: s.maxFaces,
-        decisionTimestamp: now(),
+        decisionTimestamp: null,
         captureFrameTimestamp: timestamp,
         poseTimestamp: association.pose.timestamp,
         associationPolicy: 'exclusive-iou-v1',
@@ -207,6 +282,7 @@ export function createMultiEnrollmentWorkflow({
         scoreAggregation: 'last',
       },
     };
+    prepared.metadata.decisionTimestamp = prepared.livenessMeter.capture.decisionTimestamp;
     s.status = 'saving';
     display();
     if (s.guided) {
@@ -245,7 +321,8 @@ export function createMultiEnrollmentWorkflow({
       s.candidate = null;
       s.status = result.persisted ? 'saved' : 'save_failed';
       s.error = result.error ?? null;
-      publish({ result });
+      if (result.persisted) discovery.reset();
+      display({ result });
     }
   }
   const api = {
@@ -262,7 +339,7 @@ export function createMultiEnrollmentWorkflow({
       publish({
         status: 'loading',
         faces: [],
-        sessions: [],
+        sessions: [...sessions.values()].map(view),
         result: null,
         error: null,
         review: null,
@@ -273,7 +350,21 @@ export function createMultiEnrollmentWorkflow({
       await engine.initialize();
       if (token !== generation) return;
       tracker.reset();
+      trackOffset = Math.max(0, ...sessions.keys());
       discovery.reset();
+      previewMeters.clear();
+      invalidatedTracks.clear();
+      poseSequence = 0;
+      clockOffset = Date.now() - now();
+      meterAvailable = false;
+      try {
+        await liveness.initialize({ blink: true, meter: true, numFaces: 10 });
+        meterGeneration = liveness.generation ?? generation;
+        meterAvailable = true;
+      } catch {
+        meterAvailable = false;
+      }
+      if (token !== generation) return;
       lastComparison = -Infinity;
       lastFrameAt = null;
       publish({ status: 'tracking' });
@@ -341,20 +432,9 @@ export function createMultiEnrollmentWorkflow({
           throw new Error('Not enough sample slots.');
         const settings = structuredClone(db.settings);
         settings.enrollmentLiveness ??= structuredClone(DEFAULT_LIVENESS);
-        const blink =
-          settings.enrollmentLiveness.blink ||
-          [...sessions.values()].some(
-            (s) => !terminal(s.status) && s.settings.enrollmentLiveness.blink,
-          );
-        configuringPose = true;
-        try {
-          if (poseTask) await poseTask;
-          if (token !== generation) return;
-          await liveness.initialize({ blink, numFaces: 10 });
-        } finally {
-          configuringPose = false;
-        }
-        if (token !== generation) return;
+        if (livenessDisabled(settings.enrollmentLiveness))
+          throw new Error('Enable at least one enrollment challenge in Settings');
+        if (!meterAvailable) throw new Error('Liveness unavailable');
         await discovery.claim({ trackId, personId, allowMultiple: true });
         if (token !== generation) return;
         const id = crypto.randomUUID(),
@@ -370,9 +450,18 @@ export function createMultiEnrollmentWorkflow({
             enrollmentRevision: 0,
             createdAt: new Date().toISOString(),
           };
+        const enrollmentSessionId = crypto.randomUUID();
+        previewMeters.delete(trackId);
         sessions.set(trackId, {
           trackId,
-          id: crypto.randomUUID(),
+          id: enrollmentSessionId,
+          meter: meterFactory({
+            cameraSessionId: state.sessionId,
+            enrollmentSessionId,
+            trackId,
+            workerGeneration: meterGeneration,
+            assetIdentity: liveness.manifest?.sha256,
+          }),
           person: structuredClone(person),
           newPerson: existing ? null : person,
           settings,
@@ -397,8 +486,15 @@ export function createMultiEnrollmentWorkflow({
       return result;
     },
     async observePose(frame, timestamp) {
-      if (poseBusy || configuringPose || ![...sessions.values()].some((s) => !terminal(s.status)))
+      if (poseBusy || configuringPose || !meterAvailable || !faces.length) return;
+      if (liveness.generation != null && liveness.generation !== meterGeneration) {
+        meterAvailable = false;
+        previewMeters.clear();
+        poses.clear();
+        for (const s of sessions.values()) if (!terminal(s.status)) s.meter.reset();
+        display();
         return;
+      }
       poseBusy = true;
       const token = generation;
       try {
@@ -406,6 +502,18 @@ export function createMultiEnrollmentWorkflow({
         poseTask = task;
         const result = await task;
         if (token !== generation) return;
+        if (
+          (liveness.generation != null && liveness.generation !== meterGeneration) ||
+          lastFrameAt == null ||
+          now() - lastFrameAt > 1500
+        ) {
+          meterAvailable = false;
+          previewMeters.clear();
+          poses.clear();
+          for (const s of sessions.values()) if (!terminal(s.status)) s.meter.reset();
+          display();
+          return;
+        }
         const observations = result.faces ?? (result.box ? [result] : []);
         const associated = associateFacePoses(
           faces,
@@ -413,6 +521,38 @@ export function createMultiEnrollmentWorkflow({
         );
         for (const [id, match] of associated) match.pose = { ...match.pose, sourceTrackId: id };
         poses = associated;
+        poseSequence++;
+        for (const face of faces) {
+          if (!previewMeters.has(face.trackId))
+            previewMeters.set(
+              face.trackId,
+              meterFactory({
+                cameraSessionId: state.sessionId,
+                trackId: face.trackId,
+                workerGeneration: meterGeneration,
+                assetIdentity: liveness.manifest?.sha256,
+              }),
+            );
+          if (invalidatedTracks.delete(face.trackId)) previewMeters.get(face.trackId).reset();
+          const session = sessions.get(face.trackId);
+          const meters = [previewMeters.get(face.trackId)];
+          if (session && !terminal(session.status)) meters.push(session.meter);
+          const match = associated.get(face.trackId);
+          for (const meter of meters) {
+            if (!match || face.ambiguous || face.reasonCode || now() - timestamp > 1500) {
+              if (!face.reasonCode && observations.length && !match) meter.reset();
+              else meter.pause();
+            } else
+              meter.update({
+                ...match.pose,
+                sequence: poseSequence,
+                sourceTrackId: face.trackId,
+                workerGeneration: meterGeneration,
+                fresh: true,
+                exclusive: true,
+              });
+          }
+        }
         for (const s of sessions.values())
           if (!terminal(s.status)) {
             const match = associated.get(s.trackId);
@@ -423,6 +563,18 @@ export function createMultiEnrollmentWorkflow({
             s.challenge.update({ ...match.pose, fresh: true });
           }
         display();
+      } catch (error) {
+        if (token === generation) {
+          meterAvailable = false;
+          previewMeters.clear();
+          poses.clear();
+          for (const s of sessions.values())
+            if (!terminal(s.status)) {
+              s.meter.reset();
+              s.challenge.pause();
+            }
+          display({ error: `Liveness unavailable: ${error.message}` });
+        }
       } finally {
         poseBusy = false;
         poseTask = null;
@@ -444,16 +596,26 @@ export function createMultiEnrollmentWorkflow({
         });
         if (token !== generation) return;
         if (now() - timestamp > 1500) {
-          for (const s of sessions.values()) if (!terminal(s.status)) s.challenge.pause();
+          for (const s of sessions.values())
+            if (!terminal(s.status)) {
+              s.challenge.pause();
+              s.meter.reset();
+              s.candidate = null;
+              s.hold = null;
+            }
+          previewMeters.clear();
+          poses.clear();
           faces = [];
           discovery.reset();
           display({ error: 'Analysis delayed. Hold still.' });
           return;
         }
-        faces = tracker.update(
-          extracted.faces.map((f, i) => ({ ...f, detectionId: f.detectionId ?? i })),
-          timestamp,
-        ).faces;
+        faces = tracker
+          .update(
+            extracted.faces.map((f, i) => ({ ...f, detectionId: f.detectionId ?? i })),
+            timestamp,
+          )
+          .faces.map((face) => ({ ...face, trackId: face.trackId + trackOffset }));
         lastFrameAt = timestamp;
         const vectors = includeEmbedding
           ? (extracted.faceEmbeddings ??
@@ -464,15 +626,31 @@ export function createMultiEnrollmentWorkflow({
         if (vectors.length) lastComparison = timestamp;
         await discovery.observe(faces, null, timestamp, vectors);
         if (token !== generation) return;
-        for (const s of sessions.values())
+        for (const s of sessions.values()) {
+          if (terminal(s.status) && !faces.some((f) => f.trackId === s.trackId)) {
+            s.detached = true;
+            invalidateTrack(s.trackId);
+          }
           if (!terminal(s.status)) {
             const face = faces.find((f) => f.trackId === s.trackId);
+            if (!face) {
+              s.meter.reset();
+              s.candidate = null;
+              s.hold = null;
+              poses.delete(s.trackId);
+            }
             if (face?.ambiguous || (!face && timestamp - s.lastSeen > 1500))
               cancelSession(s, 'Face association was lost. Confirm this person again.');
             if (face) {
               s.lastSeen = timestamp;
               s.maxFaces = Math.max(s.maxFaces, faces.length);
             }
+          }
+        }
+        for (const id of previewMeters.keys())
+          if (!faces.some((face) => face.trackId === id)) {
+            previewMeters.delete(id);
+            invalidateTrack(id);
           }
         for (const [id, s] of sessions)
           if (
@@ -515,7 +693,7 @@ export function createMultiEnrollmentWorkflow({
             cancelSession(s, 'Enrollment changed. Confirm this person again.');
             continue;
           }
-          if (!challengeReady(live)) {
+          if (!challengeReady(live) || s.meter.snapshot().status !== 'passed_basic') {
             s.status = 'challenging';
             continue;
           }
@@ -588,6 +766,7 @@ export function createMultiEnrollmentWorkflow({
         s.status = 'completed';
         s.review = null;
         s.captures = [];
+        discovery.reset();
       } catch (error) {
         s.status = 'set_save_failed';
         s.error = error.message;
@@ -616,6 +795,7 @@ export function createMultiEnrollmentWorkflow({
         s.result = result;
         s.status = result.persisted ? 'saved' : 'save_failed';
         s.error = result.error ?? null;
+        if (result.persisted) discovery.reset();
         display({ result });
       } catch (error) {
         s.status = 'save_failed';
@@ -651,14 +831,31 @@ export function createMultiEnrollmentWorkflow({
       return Promise.resolve();
     },
     stale() {
-      if (lastFrameAt !== null && now() - lastFrameAt > 1500 && faces.length) {
+      const timestamp = now();
+      let changed = false;
+      for (const meter of previewMeters.values()) {
+        const before = meter.snapshot().activity;
+        meter.tick?.(timestamp);
+        if (before && before.score !== meter.snapshot().activity?.score) changed = true;
+      }
+      for (const session of sessions.values())
+        if (!terminal(session.status)) {
+          const before = session.meter.snapshot().activity;
+          session.meter.tick?.(timestamp);
+          if (before && before.score !== session.meter.snapshot().activity?.score) changed = true;
+        }
+      if (lastFrameAt !== null && timestamp - lastFrameAt > 1500 && faces.length) {
+        for (const face of faces) invalidateTrack(face.trackId);
         faces = [];
+        previewMeters.clear();
+        poses.clear();
         discovery.reset();
+        for (const s of sessions.values()) if (terminal(s.status)) s.detached = true;
         for (const s of sessions.values())
           if (!terminal(s.status))
             cancelSession(s, 'Camera analysis stopped. Confirm this face again.');
         display();
-      }
+      } else if (changed) display();
     },
     fail(error) {
       api.stop();
@@ -666,11 +863,18 @@ export function createMultiEnrollmentWorkflow({
     },
     stop() {
       generation++;
-      for (const s of sessions.values()) {
+      for (const [id, s] of sessions) {
+        if (
+          ['review', 'saving_set', 'set_save_failed', 'save_failed', 'retrying'].includes(s.status)
+        ) {
+          s.detached = true;
+          continue;
+        }
         s.controller.abort();
-        if (s.result && !s.result.persisted) workflow.discard(s.result.attemptId);
+        sessions.delete(id);
       }
-      sessions.clear();
+      previewMeters.clear();
+      meterAvailable = false;
       faces = [];
       poses.clear();
       discovery.reset();
@@ -679,7 +883,7 @@ export function createMultiEnrollmentWorkflow({
       publish({
         status: 'stopped',
         faces: [],
-        sessions: [],
+        sessions: [...sessions.values()].map(view),
         needsIndependentPose: false,
         enrollmentPerson: null,
         discovery: null,

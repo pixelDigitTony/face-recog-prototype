@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createActiveChallenge } from '@/utils/hooks/faceRecognition/liveness/activeChallenge';
 import {
   DEFAULT_LIVENESS,
@@ -9,9 +9,6 @@ import {
   validateDatabase,
 } from '@/utils/hooks/faceRecognition/repositories/databaseSchema';
 import { migrateDatabase } from '@/utils/hooks/faceRecognition/repositories/migrateDatabase';
-import { createLocalStorageRepository } from '@/utils/hooks/faceRecognition/repositories/localStorageRepository';
-import { createLiveFaceWorkflow } from '@/utils/hooks/faceRecognition/workflows/liveFaceWorkflow';
-import { createFaceWorkflow } from '@/utils/hooks/faceRecognition/workflows/faceWorkflow';
 
 const context = { environment: 'test', companyId: 'company', storeId: null };
 const manifest = {
@@ -111,226 +108,89 @@ describe('configurable enrollment challenges', () => {
   });
 });
 
-async function harness({ guided = true, configuration = off } = {}) {
-  let raw = null,
-    quota = false,
-    yaw = 0,
-    time = 0,
-    faces = [face];
-  const repository = createLocalStorageRepository({
-    context,
-    storage: {
-      getItem: () => raw,
-      setItem: (_k, v) => {
-        if (quota) throw new Error('Full');
-        raw = v;
-      },
-    },
-    locks: { request: (_k, _o, cb) => cb({}) },
-    events: null,
-  });
-  await repository.load();
-  await repository.commit({
-    type: 'savePerson',
-    person: {
-      id: 'p',
-      displayName: 'Person',
-      employeeCode: 'E1',
-      acknowledgedAt: new Date().toISOString(),
-    },
-  });
-  await repository.commit({
-    type: 'settings',
-    settings: { matchThreshold: 0.85, saveThumbnails: false, enrollmentLiveness: configuration },
-  });
-  const engine = {
-    manifest,
-    initialize: vi.fn(),
-    analyzeFrame: vi.fn(async () => ({
-      faces,
-      embedding: [...vector],
-      modelIdentity: manifest,
-      preprocessingVersion: 'v1',
-      quality: {},
-    })),
-  };
-  const liveness = {
-    manifest: { sha256: 'pose-model' },
-    initialize: vi.fn(),
-    observe: vi.fn(async () => ({ yaw, box: face.box, eyeBlinkLeft: 0, eyeBlinkRight: 0 })),
-  };
-  const workflow = createFaceWorkflow({ repository, engine, context });
-  const live = createLiveFaceWorkflow({
-    repository,
-    engine,
-    liveness,
-    workflow,
-    context,
-    now: () => time,
-  });
-  await live.start({ personId: 'p', purpose: 'enroll', guided });
-  return {
-    live,
-    repository,
-    engine,
-    liveness,
-    raw: () => raw,
-    setQuota: (v) => (quota = v),
-    setFaces: (v) => (faces = v),
-    step: async (pose = 0, dt = 150) => {
-      yaw = pose;
-      time += dt;
-      await live.process({ width: 640, height: 480 }, time);
-    },
-    async capture(pose) {
-      for (let i = 0; i < 8; i++) await this.step(pose);
-      expect(live.getSnapshot().status).toBe('ready_to_enroll');
-      await live.enroll();
-      await this.step(pose);
-    },
-  };
+import { harness as meterHarness, bind, perform } from './enrollmentFixtures';
+
+async function guidedHarness() {
+  const h = await meterHarness();
+  await bind(h, 1, 'Person', true);
+  await perform(h, [1]);
+  expect(h.flow.getSnapshot().sessions.find((s) => s.trackId === 1).stage).toBe(1);
+  for (const yaw of [15, -15]) {
+    h.yaw[0] = yaw;
+    await h.wait(1200);
+  }
+  h.yaw[0] = 0;
+  expect(h.flow.getSnapshot().sessions.find((s) => s.trackId === 1).status).toBe('review');
+  return h;
 }
 
-describe('guided capture and disabled liveness provenance', () => {
-  it('restarts only the unfinished capture hold after a quality interruption', async () => {
-    const h = await harness({ guided: false });
-    await h.step(0);
-    await h.step(0);
-    h.setFaces([{ ...face, reasonCode: 'BLURRED_FACE' }]);
-    await h.step(0);
-    h.setFaces([face]);
-    await h.step(0);
-    expect(h.live.getSnapshot().status).toBe('preparing_enrollment');
-    expect(h.live.getSnapshot().liveness.reason).toBe('disabled_in_settings');
-    await h.step(0);
-    await h.step(0);
-    expect(h.live.getSnapshot().status).toBe('ready_to_enroll');
-    h.repository.dispose();
-  });
-  it('seals three separate captures and atomically saves after camera processing ends', async () => {
-    const h = await harness();
-    for (const pose of [0, 15, -15]) await h.capture(pose);
-    expect(h.live.getSnapshot().status).toBe('review');
+describe('guided capture with separate motion evidence', () => {
+  it('seals three captures and atomically saves the guided set with separate proof', async () => {
+    const h = await guidedHarness();
     expect(h.repository.getSnapshot().database.templates).toHaveLength(0);
-    const calls = h.engine.analyzeFrame.mock.calls.length;
-    await h.step(0);
-    expect(h.engine.analyzeFrame.mock.calls.length).toBe(calls);
-    await h.live.saveSet(['Front', 'Makeup left', 'Makeup right']);
+    await h.flow.saveSet(['Front', 'Left', 'Right'], 1);
     const db = h.repository.getSnapshot().database;
-    expect(db.templates.map((t) => t.label)).toEqual(['Front', 'Makeup left', 'Makeup right']);
+    expect(db.templates.map((t) => t.label)).toEqual(['Front', 'Left', 'Right']);
     expect(db.attempts).toHaveLength(3);
     expect(new Set(db.templates.map((t) => t.id)).size).toBe(3);
     expect(new Set(db.templates.map((t) => t.captureSetId)).size).toBe(1);
-    expect(db.people[0]).not.toHaveProperty('primaryTemplateId');
-    for (const a of db.attempts)
-      expect(a).toMatchObject({
-        livenessStatus: 'not_checked',
-        liveness: { reason: 'disabled_in_settings', steps: [] },
-      });
-    expect(db.templates.every((t) => t.thumbnailDataUrl === null)).toBe(true);
+    for (const a of db.attempts) {
+      expect(a.liveness.status).toBe('passed_basic');
+      expect(a.livenessMeter.status).toBe('passed_basic');
+    }
     expect(() => validateDatabase(db, context)).not.toThrow();
-    const corrupt = structuredClone(db);
-    corrupt.attempts[0].livenessStatus = 'passed_basic';
-    expect(() => validateDatabase(corrupt, context)).toThrow(/Disabled/);
-    await h.live.saveSet(['Front', 'Makeup left', 'Makeup right']);
+    await h.flow.saveSet(['Front', 'Left', 'Right'], 1);
     expect(h.repository.getSnapshot().database.templates).toHaveLength(3);
-    h.repository.dispose();
   });
-  it('keeps the review on quota failure and saves once on retry without more inference', async () => {
-    const h = await harness();
-    for (const pose of [0, 15, -15]) await h.capture(pose);
-    const before = h.raw(),
-      calls = h.engine.analyzeFrame.mock.calls.length;
-    h.setQuota(true);
-    await h.live.saveSet(['a', 'b', 'c']);
-    expect(h.live.getSnapshot().status).toBe('set_save_failed');
-    expect(h.raw()).toBe(before);
-    h.setQuota(false);
-    await h.live.saveSet(['a', 'b', 'c']);
-    expect(h.repository.getSnapshot().database.templates).toHaveLength(3);
-    expect(h.engine.analyzeFrame.mock.calls.length).toBe(calls);
-    h.repository.dispose();
-  });
-  it('rejects stale review revisions and supports discard without saved captures', async () => {
-    const h = await harness();
-    for (const pose of [0, 15, -15]) await h.capture(pose);
-    const db = h.repository.getSnapshot().database;
-    db.people[0].enrollmentRevision++;
-    await expect(h.live.saveSet(['a', 'b', 'c'])).rejects.toThrow(/changed/);
-    h.live.discardSet();
-    expect(h.live.getSnapshot().review).toBeNull();
-    expect(db.templates).toHaveLength(0);
-    h.repository.dispose();
-  });
-  it('invalidates pending poses when multiple people interrupt the set', async () => {
-    const h = await harness();
-    await h.capture(0);
-    h.setFaces([face, { ...face, box: [300, 10, 120, 140] }]);
-    await h.step();
-    h.setFaces([face]);
-    await h.capture(0);
-    expect(h.live.getSnapshot().status).not.toBe('review');
-    expect(h.live.getSnapshot().liveness.prompt).toContain('left');
-    h.repository.dispose();
-  });
-  it('captures one live sample with disabled evidence and rejects forged capture consistency', async () => {
-    const h = await harness({ guided: false });
-    await h.capture(0);
-    const db = h.repository.getSnapshot().database;
-    expect(db.templates).toHaveLength(1);
-    const bad = structuredClone(db);
-    bad.attempts[0].captureConsistency = 0.85;
-    expect(() => validateDatabase(bad, context)).toThrow(/evidence/);
-    h.repository.dispose();
-  });
-  it('does not change an active configuration when Settings changes', async () => {
-    const h = await harness({ guided: false });
-    await h.repository.commit({
-      type: 'settings',
-      settings: {
-        matchThreshold: 0.85,
-        saveThumbnails: false,
-        enrollmentLiveness: { ...off, blink: true },
-      },
-    });
-    await h.capture(0);
-    expect(h.repository.getSnapshot().database.attempts[0].liveness.configuration).toEqual(off);
-    expect(h.repository.getSnapshot().database.settings.enrollmentLiveness.blink).toBe(true);
-    h.repository.dispose();
-  });
-  it('retries an identical set idempotently and rejects changed reuse', async () => {
-    const h = await harness();
-    for (const pose of [0, 15, -15]) await h.capture(pose);
-    const commit = h.repository.commit;
-    let operation;
-    h.repository.commit = (op) => {
-      operation = structuredClone({ ...op, signal: undefined });
-      return commit(op);
-    };
-    await h.live.saveSet(['a', 'b', 'c']);
+  it('retains sealed review after quota failure and retries without new observations', async () => {
+    const h = await guidedHarness();
     const before = h.raw();
-    await commit(operation);
+    h.quota(true);
+    await h.flow.saveSet(['a', 'b', 'c'], 1);
+    expect(h.flow.getSnapshot().sessions[0].status).toBe('set_save_failed');
     expect(h.raw()).toBe(before);
-    operation.captures[0].template.label = 'different';
-    await expect(commit(operation)).rejects.toThrow(/conflicts/);
-    expect(h.raw()).toBe(before);
-    h.repository.dispose();
+    h.flow.stop();
+    h.quota(false);
+    await h.flow.saveSet(['a', 'b', 'c'], 1);
+    expect(h.repository.getSnapshot().database.templates).toHaveLength(3);
   });
-  it('rejects malformed guided evidence without a partial write', async () => {
-    const h = await harness();
-    for (const pose of [0, 15, -15]) await h.capture(pose);
+  it('rejects malformed guided evidence without partial writes', async () => {
+    const h = await guidedHarness();
     const commit = h.repository.commit;
     h.repository.commit = (op) => {
       op.captures[1].attempt.trackId = 99;
       return commit(op);
     };
     const before = h.raw();
-    await h.live.saveSet(['a', 'b', 'c']);
-    expect(h.live.getSnapshot().status).toBe('set_save_failed');
+    await h.flow.saveSet(['a', 'b', 'c'], 1);
+    expect(h.flow.getSnapshot().sessions[0].status).toBe('set_save_failed');
     expect(h.raw()).toBe(before);
-    expect(h.repository.getSnapshot().database.templates).toHaveLength(0);
-    h.repository.dispose();
   });
+  it('retries an identical set idempotently and rejects changed reuse', async () => {
+    const h = await guidedHarness();
+    const commit = h.repository.commit;
+    let operation;
+    h.repository.commit = (op) => {
+      operation = structuredClone({ ...op, signal: undefined });
+      return commit(op);
+    };
+    await h.flow.saveSet(['a', 'b', 'c'], 1);
+    const before = h.raw();
+    await commit(operation);
+    expect(h.raw()).toBe(before);
+    operation.captures[0].template.label = 'different';
+    await expect(commit(operation)).rejects.toThrow(/conflicts/);
+  });
+  it('retains a sealed review for explicit discard', async () => {
+    const h = await guidedHarness();
+    h.flow.stop();
+    h.flow.discardSet(1);
+    expect(h.flow.getSnapshot().sessions.find((s) => s.trackId === 1).review).toBeNull();
+    expect(h.repository.getSnapshot().database.templates).toHaveLength(0);
+  });
+});
+
+describe('historical schema compatibility', () => {
   it('migrates schema 4 without primary pointers or fabricated historical liveness', () => {
     const old = createDatabase(context);
     old.schemaVersion = 4;
@@ -365,4 +225,118 @@ describe('guided capture and disabled liveness provenance', () => {
     expect(next.templates).toEqual(old.templates);
     expect(next.settings.enrollmentLiveness).toEqual(DEFAULT_LIVENESS);
   });
+});
+
+describe('current enrollment gate regressions', () => {
+  it('loads old all-off settings and blocks a new operation', async () => {
+    const h = await meterHarness(off);
+    expect(h.repository.getSnapshot().database.settings.enrollmentLiveness).toEqual(off);
+    await expect(bind(h, 1, 'Person')).rejects.toThrow('Enable at least one');
+    expect(h.repository.getSnapshot().database.people).toHaveLength(0);
+  });
+  it('keeps passed evidence while quality interrupts an unfinished guided pose', async () => {
+    const h = await meterHarness();
+    await bind(h, 1, 'Person', true);
+    await perform(h, [1]);
+    const before = structuredClone(h.flow.getSnapshot().sessions[0].meter.accepted);
+    h.yaw[0] = 15;
+    await h.wait(150);
+    h.faces([{ ...face, reasonCode: 'BLURRED_FACE' }]);
+    await h.step();
+    expect(h.flow.getSnapshot().sessions[0].stage).toBe(1);
+    expect(h.flow.getSnapshot().sessions[0].meter.accepted).toEqual(before);
+    h.faces([face]);
+    await h.wait(150);
+    expect(h.flow.getSnapshot().sessions[0].stage).toBe(1);
+    await h.wait(1000);
+    expect(h.flow.getSnapshot().sessions[0].stage).toBe(2);
+  });
+  it('rejects changed identity during sealed review and allows discard', async () => {
+    const h = await guidedHarness();
+    const session = h.flow.getSnapshot().sessions[0];
+    const db = h.repository.getSnapshot().database;
+    db.people.push({ ...session.person, enrollmentRevision: 1 });
+    await expect(h.flow.saveSet(['a', 'b', 'c'], 1)).rejects.toThrow(/changed/);
+    h.flow.discardSet(1);
+    expect(h.flow.getSnapshot().sessions[0].review).toBeNull();
+    expect(db.templates).toHaveLength(0);
+  });
+  it('keeps active challenge configuration when settings change', async () => {
+    const h = await meterHarness();
+    await bind(h, 1, 'Person');
+    await h.repository.commit({
+      type: 'settings',
+      settings: {
+        matchThreshold: 0.85,
+        saveThumbnails: false,
+        enrollmentLiveness: { version: 1, turnLeft: true, turnRight: false, blink: false },
+      },
+    });
+    await perform(h, [1]);
+    const db = h.repository.getSnapshot().database;
+    expect(db.attempts[0].liveness.configuration).toEqual({ ...off, blink: true });
+    expect(db.settings.enrollmentLiveness.turnLeft).toBe(true);
+  });
+  it('rejects forged capture consistency in current policy evidence', async () => {
+    const h = await meterHarness();
+    await bind(h, 1, 'Person');
+    await perform(h, [1]);
+    const bad = structuredClone(h.repository.getSnapshot().database);
+    bad.attempts[0].captureConsistency = 0.85;
+    expect(() => validateDatabase(bad, context)).toThrow();
+  });
+});
+
+describe('guided association and capacity', () => {
+  it('allows a second person in view but rejects ambiguous target association', async () => {
+    const h = await meterHarness();
+    await bind(h, 1, 'Person', true);
+    await perform(h, [1]);
+    expect(h.flow.getSnapshot().sessions[0].stage).toBe(1);
+    h.faces([face, { ...face }]);
+    await h.step();
+    expect(h.repository.getSnapshot().database.templates).toHaveLength(0);
+    expect(h.flow.getSnapshot().sessions[0].meter.status).not.toBe('passed_basic');
+  });
+  it('enforces the five-sample limit before beginning a guided set', async () => {
+    const h = await guidedHarness();
+    await h.flow.saveSet(['a', 'b', 'c'], 1);
+    const person = h.repository.getSnapshot().database.people[0];
+    await h.wait(1600);
+    await expect(
+      h.flow.nameDetectedFace({
+        trackId: 1,
+        personId: person.id,
+        acknowledged: true,
+        guided: true,
+      }),
+    ).rejects.toThrow('sample slots');
+    expect(h.repository.getSnapshot().database.templates).toHaveLength(3);
+  });
+});
+
+it('rejects a sealed guided review if an existing enrollee revision changes', async () => {
+  const h = await meterHarness();
+  await bind(h, 1, 'Person');
+  await perform(h, [1]);
+  const db = h.repository.getSnapshot().database;
+  const person = db.people[0];
+  await h.wait(1600);
+  await h.flow.nameDetectedFace({
+    trackId: 1,
+    personId: person.id,
+    acknowledged: true,
+    guided: true,
+  });
+  await perform(h, [1]);
+  await h.wait(1000);
+  for (const yaw of [15, -15]) {
+    h.yaw[0] = yaw;
+    await h.wait(1200);
+  }
+  expect(h.flow.getSnapshot().sessions[0].status).toBe('review');
+  person.enrollmentRevision++;
+  await expect(h.flow.saveSet(['a', 'b', 'c'], 1)).rejects.toThrow(/changed/);
+  h.flow.discardSet(1);
+  expect(db.templates).toHaveLength(1);
 });

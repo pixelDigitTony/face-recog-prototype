@@ -3,9 +3,17 @@ export function createFaceLandmarkerAdapter(baseUrl) {
     initializing,
     manifest,
     blink = false,
-    numFaces = 1;
+    meter = false,
+    numFaces = 1,
+    epoch = 0,
+    lifetime = 0;
+  let configurationQueue = Promise.resolve();
   const pending = new Map();
   function call(type, payload) {
+    let finishDone;
+    const done = new Promise((resolve) => {
+      finishDone = resolve;
+    });
     return new Promise((resolve, reject) => {
       const id = crypto.randomUUID();
       const timer = setTimeout(() => {
@@ -15,16 +23,18 @@ export function createFaceLandmarkerAdapter(baseUrl) {
       const finish = (fn, value) => {
         clearTimeout(timer);
         pending.delete(id);
+        finishDone();
         fn(value);
       };
       pending.set(id, {
+        done,
         resolve: (value) => finish(resolve, value),
         reject: (error) => finish(reject, error),
       });
       worker.postMessage({ id, type, payload });
     });
   }
-  function dispose() {
+  function terminate() {
     worker?.terminate();
     worker = null;
     initializing = null;
@@ -32,20 +42,15 @@ export function createFaceLandmarkerAdapter(baseUrl) {
     for (const task of [...pending.values()])
       task.reject(new DOMException('Liveness stopped.', 'AbortError'));
   }
-  return {
-    get manifest() {
-      return manifest;
-    },
-    initialize(options) {
-      const requestedFaces = options?.numFaces ?? numFaces;
-      if (!Number.isInteger(requestedFaces) || requestedFaces < 1 || requestedFaces > 10)
-        throw new Error('Liveness supports one to ten faces.');
-      if (options && (Boolean(options.blink) !== blink || requestedFaces !== numFaces)) {
-        dispose();
-        blink = Boolean(options.blink);
-        numFaces = requestedFaces;
-      }
-      return (initializing ||= (async () => {
+  function dispose() {
+    lifetime++;
+    epoch++;
+    terminate();
+  }
+  async function ensure() {
+    if (!initializing) {
+      const token = epoch;
+      initializing = (async () => {
         worker = new Worker(new URL('../../../../workers/liveness.worker.js', import.meta.url));
         worker.onmessage = ({ data }) => {
           const task = pending.get(data.id);
@@ -57,17 +62,68 @@ export function createFaceLandmarkerAdapter(baseUrl) {
             task.reject(new Error(event.message || 'Liveness worker failed.'));
         };
         try {
-          manifest = await call('initialize', { baseUrl, blink, numFaces });
+          const result = await call('initialize', { baseUrl, blink, meter, numFaces });
+          if (token !== epoch) throw new DOMException('Liveness stopped.', 'AbortError');
+          manifest = result;
           return manifest;
         } catch (error) {
-          dispose();
+          if (token === epoch) dispose();
           throw error;
         }
-      })());
+      })();
+    }
+    return initializing;
+  }
+  return {
+    get manifest() {
+      return manifest;
     },
-    async observe(frame, timestamp) {
-      await this.initialize();
-      return call('observe', { frame, timestamp });
+    get generation() {
+      return epoch;
+    },
+    initialize(options) {
+      if (!options) {
+        const token = lifetime;
+        return configurationQueue.then(() => {
+          if (token !== lifetime) throw new DOMException('Liveness stopped.', 'AbortError');
+          return ensure();
+        });
+      }
+      const requestedFaces = options.numFaces ?? numFaces;
+      if (!Number.isInteger(requestedFaces) || requestedFaces < 1 || requestedFaces > 10)
+        throw new Error('Liveness supports one to ten faces.');
+      const token = lifetime;
+      const operation = configurationQueue.then(async () => {
+        if (token !== lifetime) throw new DOMException('Liveness stopped.', 'AbortError');
+        if (
+          Boolean(options.blink) !== blink ||
+          Boolean(options.meter) !== meter ||
+          requestedFaces !== numFaces
+        ) {
+          await Promise.all([...pending.values()].map((task) => task.done));
+          if (token !== lifetime) throw new DOMException('Liveness stopped.', 'AbortError');
+          terminate();
+          epoch++;
+          blink = Boolean(options.blink);
+          meter = Boolean(options.meter);
+          numFaces = requestedFaces;
+        }
+        return ensure();
+      });
+      configurationQueue = operation.catch(() => {});
+      return operation;
+    },
+    observe(frame, timestamp) {
+      const token = lifetime;
+      const operation = configurationQueue.then(async () => {
+        if (token !== lifetime) throw new DOMException('Liveness stopped.', 'AbortError');
+        await ensure();
+        if (token !== lifetime || !worker)
+          throw new DOMException('Liveness stopped.', 'AbortError');
+        return call('observe', { frame, timestamp });
+      });
+      configurationQueue = operation.catch(() => {});
+      return operation;
     },
     dispose,
   };

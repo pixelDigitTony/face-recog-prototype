@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 
-test('automatic multi-person identification uses real models without selection or liveness and persists unique events', async ({
+test('automatic multi-person identification uses real models without selection and with advisory liveness and persists unique events', async ({
   page,
 }) => {
   test.skip(
@@ -174,7 +174,8 @@ test('automatic multi-person identification uses real models without selection o
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: '.local/automatic-identification-mobile.png', fullPage: true });
   await page.getByRole('button', { name: 'Stop', exact: true }).click();
-  expect(livenessRequests).toEqual([]);
+  expect(livenessRequests.some((url) => /liveness.worker/.test(url))).toBe(true);
+  await expect(page.getByTestId('face-instruction')).toHaveCount(0);
   expect(errors).toEqual([]);
   const measurements = await page.evaluate(async () => {
     const { createBrowserFaceEngine } = await import(

@@ -26,6 +26,7 @@ export function useLiveFaceTracking(
   function stop() {
     generation.current++;
     poseScheduler.current?.stop();
+    poseScheduler.current = null;
     scheduler.current?.stop();
     scheduler.current = null;
     live.stop();

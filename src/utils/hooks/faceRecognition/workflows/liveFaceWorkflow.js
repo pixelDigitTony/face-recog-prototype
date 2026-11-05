@@ -269,6 +269,10 @@ export function createLiveFaceWorkflow({
       independentPose = false,
       automaticEnrollment: automatic = false,
     }) {
+      if (purpose === 'enroll')
+        throw new Error(
+          'Live enrollment requires the per-face enrollment workflow with motion evidence.',
+        );
       if (processing) throw new Error('Previous analysis is finishing. Try again.');
       generation++;
       session = null;
