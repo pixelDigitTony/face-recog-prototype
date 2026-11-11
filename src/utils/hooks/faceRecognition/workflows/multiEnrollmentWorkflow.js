@@ -38,6 +38,7 @@ export function createMultiEnrollmentWorkflow({
     tracker = createFaceTracker(),
     sessions = new Map(),
     previewMeters = new Map(),
+    previewSeen = new Map(),
     invalidatedTracks = new Set();
   const discovery = createEnrollmentDiscovery({ repository, engine, context, now });
   let state = {
@@ -85,11 +86,12 @@ export function createMultiEnrollmentWorkflow({
   };
   const sessionMeterView = (session) => {
     const value = meterView(session.meter);
-    if (terminal(session.status) && !session.detached) {
+    if (!session.detached) {
       const live = previewMeters.get(session.trackId)?.snapshot();
       if (live?.activity) value.activity = live.activity;
-      if (!meterAvailable) value.status = 'unavailable';
     }
+    if (terminal(session.status) && !session.detached && !meterAvailable)
+      value.status = 'unavailable';
     return value;
   };
   const view = (session) => ({
@@ -353,6 +355,7 @@ export function createMultiEnrollmentWorkflow({
       trackOffset = Math.max(0, ...sessions.keys());
       discovery.reset();
       previewMeters.clear();
+      previewSeen.clear();
       invalidatedTracks.clear();
       poseSequence = 0;
       clockOffset = Date.now() - now();
@@ -451,7 +454,6 @@ export function createMultiEnrollmentWorkflow({
             createdAt: new Date().toISOString(),
           };
         const enrollmentSessionId = crypto.randomUUID();
-        previewMeters.delete(trackId);
         sessions.set(trackId, {
           trackId,
           id: enrollmentSessionId,
@@ -490,6 +492,7 @@ export function createMultiEnrollmentWorkflow({
       if (liveness.generation != null && liveness.generation !== meterGeneration) {
         meterAvailable = false;
         previewMeters.clear();
+        previewSeen.clear();
         poses.clear();
         for (const s of sessions.values()) if (!terminal(s.status)) s.meter.reset();
         display();
@@ -509,6 +512,7 @@ export function createMultiEnrollmentWorkflow({
         ) {
           meterAvailable = false;
           previewMeters.clear();
+          previewSeen.clear();
           poses.clear();
           for (const s of sessions.values()) if (!terminal(s.status)) s.meter.reset();
           display();
@@ -523,7 +527,7 @@ export function createMultiEnrollmentWorkflow({
         poses = associated;
         poseSequence++;
         for (const face of faces) {
-          if (!previewMeters.has(face.trackId))
+          if (!previewMeters.has(face.trackId)) {
             previewMeters.set(
               face.trackId,
               meterFactory({
@@ -533,16 +537,17 @@ export function createMultiEnrollmentWorkflow({
                 assetIdentity: liveness.manifest?.sha256,
               }),
             );
-          if (invalidatedTracks.delete(face.trackId)) previewMeters.get(face.trackId).reset();
+            previewSeen.set(face.trackId, timestamp);
+          }
+          if (invalidatedTracks.delete(face.trackId)) previewMeters.get(face.trackId).pause();
           const session = sessions.get(face.trackId);
           const meters = [previewMeters.get(face.trackId)];
           if (session && !terminal(session.status)) meters.push(session.meter);
           const match = associated.get(face.trackId);
           for (const meter of meters) {
-            if (!match || face.ambiguous || face.reasonCode || now() - timestamp > 1500) {
-              if (!face.reasonCode && observations.length && !match) meter.reset();
-              else meter.pause();
-            } else
+            if (!match || face.ambiguous || face.reasonCode || now() - timestamp > 1500)
+              meter.pause();
+            else
               meter.update({
                 ...match.pose,
                 sequence: poseSequence,
@@ -567,6 +572,7 @@ export function createMultiEnrollmentWorkflow({
         if (token === generation) {
           meterAvailable = false;
           previewMeters.clear();
+          previewSeen.clear();
           poses.clear();
           for (const s of sessions.values())
             if (!terminal(s.status)) {
@@ -599,12 +605,9 @@ export function createMultiEnrollmentWorkflow({
           for (const s of sessions.values())
             if (!terminal(s.status)) {
               s.challenge.pause();
-              s.meter.reset();
               s.candidate = null;
               s.hold = null;
             }
-          previewMeters.clear();
-          poses.clear();
           faces = [];
           discovery.reset();
           display({ error: 'Analysis delayed. Hold still.' });
@@ -648,10 +651,15 @@ export function createMultiEnrollmentWorkflow({
           }
         }
         for (const id of previewMeters.keys())
-          if (!faces.some((face) => face.trackId === id)) {
+          if (
+            !faces.some((face) => face.trackId === id) &&
+            timestamp - (previewSeen.get(id) ?? 0) > 1500
+          ) {
             previewMeters.delete(id);
+            previewSeen.delete(id);
             invalidateTrack(id);
           }
+        for (const face of faces) previewSeen.set(face.trackId, timestamp);
         for (const [id, s] of sessions)
           if (
             !faces.some((face) => face.trackId === id) &&
@@ -848,6 +856,7 @@ export function createMultiEnrollmentWorkflow({
         for (const face of faces) invalidateTrack(face.trackId);
         faces = [];
         previewMeters.clear();
+        previewSeen.clear();
         poses.clear();
         discovery.reset();
         for (const s of sessions.values()) if (terminal(s.status)) s.detached = true;
@@ -874,6 +883,7 @@ export function createMultiEnrollmentWorkflow({
         sessions.delete(id);
       }
       previewMeters.clear();
+      previewSeen.clear();
       meterAvailable = false;
       faces = [];
       poses.clear();

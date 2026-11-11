@@ -23,9 +23,11 @@ export function LivenessMeter({ meter, instructions = false, compact = false }) 
       shown.reason === 'insufficient_sampling'
         ? 'Insufficient sampling - use a faster camera feed'
         : (labels[status] ?? labels.unavailable);
-  const canShowNumber = ['collecting', 'passed_basic', 'insufficient_quality'].includes(status);
   const activity = shown.activity;
-  const liveActivity = canShowNumber && Number.isFinite(activity?.score);
+  const remembered = Number.isFinite(activity?.score) && activity.score > 0;
+  const canShowNumber =
+    remembered || ['collecting', 'passed_basic', 'insufficient_quality'].includes(status);
+  const liveActivity = remembered;
   const value = liveActivity ? activity.score : shown.score;
   const numeric = canShowNumber && Number.isFinite(value);
   const score = numeric ? Math.round(Math.max(0, Math.min(100, value))) : null;

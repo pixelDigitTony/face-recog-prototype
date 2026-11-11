@@ -310,11 +310,7 @@ export function createLiveIdentificationWorkflow({
         }
         const current = tracker.update(detected.faces, timestamp).faces;
         const visibleIds = new Set(current.map((f) => f.trackId));
-        for (const [id, t] of tracks)
-          if (!visibleIds.has(id)) {
-            t.meter?.reset();
-            clearTrack(t);
-          }
+        for (const [id, t] of tracks) if (!visibleIds.has(id)) clearTrack(t);
         for (const [id, t] of tracks) if (timestamp - t.seenAt > 1500) tracks.delete(id);
         for (const face of current) {
           let t = tracks.get(face.trackId);
@@ -340,7 +336,6 @@ export function createLiveIdentificationWorkflow({
           }
           t.seenAt = timestamp;
           if (face.ambiguous) {
-            t.meter?.reset();
             clearTrack(t);
           } else if (t.confirmedAt != null) {
             // Continue detection/geometry tracking, but never rerun SFace for
@@ -534,10 +529,9 @@ export function createLiveIdentificationWorkflow({
           const meter = tracks.get(face.trackId)?.meter,
             match = matches.get(face.trackId);
           if (!meter) continue;
-          if (!match || face.ambiguous || face.reasonCode || now() - timestamp > 1500) {
-            if (!face.reasonCode && observations.length && !match) meter.reset();
-            else meter.pause();
-          } else
+          if (!match || face.ambiguous || face.reasonCode || now() - timestamp > 1500)
+            meter.pause();
+          else
             meter.update({
               ...match.pose,
               sequence: poseSequence,
@@ -573,10 +567,7 @@ export function createLiveIdentificationWorkflow({
         return;
       }
       if (age > 1500) {
-        for (const t of tracks.values()) {
-          t.meter?.reset();
-          clearTrack(t, 'waiting_for_analysis');
-        }
+        for (const t of tracks.values()) clearTrack(t, 'waiting_for_analysis');
         publish({ faces: [] });
       } else {
         let changed = false;

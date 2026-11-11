@@ -74,7 +74,8 @@ export function createLivenessMeter({
     filtered = null;
   }
   function reset() {
-    activity.reset();
+    // The live percentage belongs to this face number. Proof can be invalidated
+    // without clearing the score the person already earned on this track.
     invalidated = true;
     observations = [];
     events = {};

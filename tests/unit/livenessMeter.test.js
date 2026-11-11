@@ -247,3 +247,15 @@ it('rejects malformed counts, gaps, returns, extra payloads, and stale capture e
     expect(() => validateLivenessMeter(forged, binding)).toThrow();
   }
 });
+
+it('keeps the live score when the same face number is reset', () => {
+  const meter = makeMeter();
+  for (let t = 0; t <= 400; t += 50) meter.update(observation(t));
+  for (let t = 450; t <= 800; t += 50) meter.update(observation(t, { yaw: 25 }));
+  const score = meter.snapshot().activity.score;
+  expect(score).toBeGreaterThan(0);
+  meter.reset();
+  expect(meter.snapshot().activity.score).toBe(score);
+  expect(meter.snapshot().status).toBe('invalidated');
+  expect(meter.snapshot().score).toBeNull();
+});
