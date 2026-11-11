@@ -120,7 +120,7 @@ loop bounded detection and motion observation
   Worker --> Flow : source-tagged fresh face detections / motion channels
   Flow -> Segment : exclusive association; unique continuous segment ID
   Segment -> Segment : strict capture-meter events + separate challenge
-  Segment --> UI : live 50/50 activity, check status, attached prompt
+  Segment --> UI : live calculated activity, check status, attached prompt
   Flow -> Flow : aggregate counts, spans, intervals, pass times
 end
 alt target duration reached with healthy workers
@@ -195,8 +195,8 @@ note over Meter, DB
   Scan meter is transient and cannot gate identity recognition.
   Historical decisions keep original policy validation.
   Guided reviews and retries preserve sealed capture evidence.
-  Live activity resets after 15 seconds without qualified movement.
-  An idle reset never revokes completed capture proof.
+  Live activity is one calculated score and does not reset on a timer.
+  A quiet face never revokes completed capture proof.
 end note
 @enduml
 
@@ -237,24 +237,21 @@ participant "Per-track live movement reducer" as Activity
 participant "Per-track capture meter" as Proof
 participant "Existing monotonic scheduler" as Clock
 participant "MUI face label / accessible list" as UI
-Input -> Activity : bilateral blink or supported nonrigid expression change
-Activity -> Activity : shared face bucket = 50; refresh last movement
-Input -> Activity : meaningful yaw/pitch change
-Activity -> Activity : head bucket = 50; refresh last movement
+Input -> Activity : bilateral blink, supported expression, or yaw/pitch change
+Activity -> Activity : replace that signal's magnitude and recalculate 0-100
 Input -> Proof : original motion-evidence-v1 temporal events
 Proof -> Proof : latch accepted proof when original checks pass
-Activity --> UI : transient score = face + head, max 100
+Activity --> UI : transient calculated score, max 100
 Proof --> UI : separate check status and accepted time
-loop continuing qualified movement
-  Input -> Activity : refresh timer even when bucket is full
-  Activity --> UI : retain highest contributions
+loop later qualified movement
+  Input -> Activity : higher magnitude raises the score; lower magnitude lowers it
+  Activity --> UI : show the new calculation
 end
-Clock -> Activity : at least 15,000 ms since last qualified movement
-Activity -> Activity : reset both activity buckets to 0
-Activity --> UI : No recent movement; completed checks unchanged
+Clock -> Activity : stillness does not clear the score
+Activity --> UI : completed checks unchanged
 note over Activity, Proof
-  Held poses, detector jitter and box translation do not refresh activity.
-  Quality pauses retain activity until the idle boundary.
+  Held poses keep the last calculation. Jitter and box translation do not count.
+  Quality pauses retain the calculated score.
   True continuity loss starts a fresh face operation.
   Saved attempts, samples and sealed retry proof never store live activity.
   Scan continues activity after identity confirmation without repeated SFace matching.

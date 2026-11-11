@@ -130,13 +130,14 @@ export function SettingsPage() {
                     />
                   ))}
                   <Typography variant="caption">
-                    Liveness evidence meter required for live enrollment. Live movement combines
-                    face or blink movement (up to 50) and head movement (up to 50). It resets after
-                    15 seconds without movement. A completed enrollment check remains ready and its
-                    recorded evidence stays unchanged. These are basic motion checks, not a
-                    probability of being alive; replay resistance is not validated. Prompted Blink
-                    can be disabled while passive blink remains active. Enable at least one prompted
-                    challenge for live enrollment.
+                    Liveness evidence meter required for live enrollment. Once blink, expression, or
+                    head movement is detected, the meter shows the calculated amount of that
+                    movement. It rises or falls only when a new movement calculates a different
+                    amount, and it does not reset on a timer. A completed enrollment check remains
+                    ready and its recorded evidence stays unchanged. These are basic motion checks,
+                    not a probability of being alive; replay resistance is not validated. Prompted
+                    Blink can be disabled while passive blink remains active. Enable at least one
+                    prompted challenge for live enrollment.
                   </Typography>
                   {error && <Alert severity="error">{error}</Alert>}
                   {success && <Alert severity="success">Settings saved.</Alert>}

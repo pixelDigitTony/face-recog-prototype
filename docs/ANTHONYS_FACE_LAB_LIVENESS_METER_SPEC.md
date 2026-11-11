@@ -4,7 +4,7 @@ Status: **Implemented and locally verified on 2026-11-04. Two GPT-6.1 Terra xhig
 Date: 2026-11-03 (Asia/Manila).  
 Project: `C:\Users\USER\projects\Starwinner\face-recog-prototype`.
 
-The [live movement retention amendment](ANTHONYS_FACE_LAB_LIVE_MOVEMENT_RETENTION_SPEC.md) supersedes the live percentage display and retention rules below: shared face/blink 50 points, head 50 points, reset after 15 seconds without movement. The original capture-proof scoring and enrollment gates remain unchanged. The [physical evaluation specification](ANTHONYS_FACE_LAB_PHYSICAL_CAMERA_EVALUATION_SPEC.md) adds an operator-run measurement workflow; real-camera acceptance still requires recorded trials.
+The live meter no longer uses the 50/50 face and head buckets or the 15-second reset from the [live movement retention amendment](ANTHONYS_FACE_LAB_LIVE_MOVEMENT_RETENTION_SPEC.md). Detected blink, expression, and head movement now set one calculated 0–100 score, and that score changes only when a new movement calculates a different amount. The original capture-proof scoring and enrollment gates remain unchanged. The [physical evaluation specification](ANTHONYS_FACE_LAB_PHYSICAL_CAMERA_EVALUATION_SPEC.md) adds an operator-run measurement workflow; real-camera acceptance still requires recorded trials.
 
 ## 1. Purpose and scope
 

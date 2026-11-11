@@ -1,59 +1,143 @@
-import { LIVE_MOVEMENT_POLICY as P } from './liveMovementPolicy';
+import { LIVE_MOVEMENT_POLICY as P, liveMovementScore } from './liveMovementPolicy';
 
-// Bounded per-track transient movement feedback. No observations are retained.
+// One score per continuous track. Each new qualified movement replaces that
+// signal's stored magnitude, and the meter is recalculated from what is stored.
+// Stillness does not clear it.
 export function createLiveMovement({ trackId, workerGeneration }) {
-  let faceScore = 0,
-    headScore = 0,
+  let score = 0,
     lastMovementAt = null,
-    idle = false;
-  let lastObservation = null,
+    idle = false,
+    lastObservation = null,
     lastSequence = -1,
-    eyes = null,
-    head = null,
-    expressions = {};
+    headAnchor = null,
+    expressionBaseline = null,
+    eyes = null;
+  const channels = {
+    head: { level: 0, peak: 0, active: false },
+    expression: { level: 0, peak: 0, active: false },
+    blink: { level: 0, peak: 0, active: false },
+  };
   const snapshot = () => ({
     policyVersion: P.version,
-    score: faceScore + headScore,
-    faceScore,
-    headScore,
+    score,
     lastMovementAt,
     idle,
   });
-  function clearPhases() {
+  const shown = (name) => {
+    const channel = channels[name];
+    return channel.active ? Math.max(channel.level, channel.peak) : channel.level;
+  };
+  function publish(timestamp) {
+    const next = liveMovementScore(shown('head'), shown('expression'), shown('blink'));
+    if (next !== score) {
+      score = next;
+      lastMovementAt = timestamp;
+    }
+    idle = false;
+  }
+  function feed(name, magnitude, timestamp) {
+    const channel = channels[name];
+    if (magnitude > 0) {
+      if (!channel.active) {
+        channel.active = true;
+        channel.peak = 0;
+      }
+      channel.peak = Math.max(channel.peak, magnitude);
+      publish(timestamp);
+      return;
+    }
+    if (!channel.active) return;
+    channel.level = channel.peak;
+    channel.peak = 0;
+    channel.active = false;
+    publish(timestamp);
+  }
+  function seal(timestamp) {
+    for (const name of Object.keys(channels)) if (channels[name].active) feed(name, 0, timestamp);
+  }
+  function clearTracking() {
+    headAnchor = null;
+    expressionBaseline = null;
     eyes = null;
-    head = null;
-    expressions = {};
+    for (const channel of Object.values(channels)) {
+      channel.level = 0;
+      channel.peak = 0;
+      channel.active = false;
+    }
   }
   function reset() {
-    faceScore = headScore = 0;
+    score = 0;
     lastMovementAt = null;
     idle = false;
     lastObservation = null;
     lastSequence = -1;
-    clearPhases();
+    clearTracking();
   }
   function pause() {
-    clearPhases();
-  }
-  function tick(timestamp) {
-    if (
-      Number.isFinite(timestamp) &&
-      lastMovementAt !== null &&
-      timestamp >= lastMovementAt &&
-      timestamp - lastMovementAt >= P.idleMs
-    ) {
-      faceScore = headScore = 0;
-      lastMovementAt = null;
-      idle = true;
-      clearPhases();
+    seal(lastObservation);
+    headAnchor = null;
+    expressionBaseline = null;
+    eyes = null;
+    for (const channel of Object.values(channels)) {
+      channel.peak = 0;
+      channel.active = false;
     }
-    return snapshot();
   }
-  function credit(family, t) {
-    if (family === 'head') headScore = P.bucketMaximum;
-    else faceScore = P.bucketMaximum;
-    lastMovementAt = t;
-    idle = false;
+  function expressionOf(o) {
+    return {
+      jaw: { coefficient: o.jawOpen, motion: o.jawMotion },
+      smile: {
+        coefficient: Math.min(o.mouthSmileLeft, o.mouthSmileRight),
+        motion: o.smileMotion,
+      },
+    };
+  }
+  function expressionMagnitude(current, baseline) {
+    const coefficientDelta = current.coefficient - baseline.coefficient;
+    const motionDelta = current.motion - baseline.motion;
+    const rising =
+      coefficientDelta >= P.expressionDelta &&
+      motionDelta >= P.expressionGeometry &&
+      current.coefficient >= P.expressionPeak;
+    const falling =
+      coefficientDelta <= -P.expressionDelta &&
+      motionDelta <= -P.expressionGeometry &&
+      baseline.coefficient >= P.expressionPeak;
+    if (!rising && !falling) return 0;
+    return Math.min(
+      1,
+      Math.abs(coefficientDelta) / P.expressionFull,
+      Math.abs(motionDelta) / P.expressionGeometryFull,
+    );
+  }
+  function blinkMagnitude(o) {
+    const open = o.eyeBlinkLeft <= P.eyeOpen && o.eyeBlinkRight <= P.eyeOpen;
+    const closed = o.eyeBlinkLeft >= P.eyeClosed && o.eyeBlinkRight >= P.eyeClosed;
+    const closure = Math.min(o.eyeBlinkLeft, o.eyeBlinkRight);
+    eyes ??= { phase: 'open', count: 0 };
+    if (eyes.phase === 'open') {
+      if (open) {
+        eyes.count += 1;
+        eyes.lastOpen = o.timestamp;
+      } else if (closed && eyes.count >= 2) {
+        eyes = {
+          phase: 'closed',
+          lastOpen: eyes.lastOpen,
+          closedAt: o.timestamp,
+          peakClosure: closure,
+        };
+      } else if (!closed) eyes.count = 0;
+      return 0;
+    }
+    if (o.timestamp - eyes.lastOpen > P.blinkMaxMs) {
+      eyes = { phase: 'open', count: open ? 1 : 0, lastOpen: open ? o.timestamp : undefined };
+      return 0;
+    }
+    if (closed) eyes.peakClosure = Math.max(eyes.peakClosure, closure);
+    const qualified = o.timestamp - eyes.closedAt >= P.blinkMinMs;
+    const depth = qualified ? (eyes.peakClosure - P.eyeClosed) / (1 - P.eyeClosed) : 0;
+    if (open) eyes = { phase: 'open', count: 1, lastOpen: o.timestamp };
+    return depth;
   }
   function update(o) {
     const fields = [
@@ -86,61 +170,40 @@ export function createLiveMovement({ trackId, workerGeneration }) {
       (lastObservation !== null && o.timestamp <= lastObservation)
     )
       return snapshot();
-    tick(o.timestamp);
-    if (lastObservation !== null && o.timestamp - lastObservation > P.maxGapMs) clearPhases();
+    if (lastObservation !== null && o.timestamp - lastObservation > P.maxGapMs) {
+      seal(lastObservation);
+      headAnchor = null;
+      expressionBaseline = null;
+      eyes = null;
+    }
     lastObservation = o.timestamp;
     lastSequence = o.sequence;
-    const open = o.eyeBlinkLeft <= P.eyeOpen && o.eyeBlinkRight <= P.eyeOpen;
-    const closed = o.eyeBlinkLeft >= P.eyeClosed && o.eyeBlinkRight >= P.eyeClosed;
-    eyes ??= { phase: 'open', count: 0 };
-    if (eyes.phase === 'open') {
-      if (open) {
-        eyes.count++;
-        eyes.lastOpen = o.timestamp;
-      } else if (closed && eyes.count >= 2) {
-        eyes.phase = 'closed';
-      } else if (!closed) eyes.count = 0;
-    } else if (o.timestamp - eyes.lastOpen > P.blinkMaxMs) {
-      eyes = { phase: 'open', count: open ? 1 : 0, lastOpen: o.timestamp };
-    } else if (open) {
-      if (o.timestamp - eyes.lastOpen >= P.blinkMinMs) credit('face', o.timestamp);
-      eyes = { phase: 'open', count: 1, lastOpen: o.timestamp };
+    headAnchor ??= { yaw: o.yaw, pitch: o.pitch };
+    const displacement = Math.max(
+      Math.abs(o.yaw - headAnchor.yaw),
+      Math.abs(o.pitch - headAnchor.pitch),
+    );
+    const headMagnitude =
+      displacement >= P.headFloorDeg ? Math.min(1, displacement / P.headFullDeg) : 0;
+    feed('head', headMagnitude, o.timestamp);
+    if (headMagnitude === 0 && !channels.head.active) headAnchor = { yaw: o.yaw, pitch: o.pitch };
+
+    const frontal = Math.abs(o.yaw) <= P.frontal && Math.abs(o.pitch) <= P.frontal;
+    const currentExpression = expressionOf(o);
+    let expressionMagnitudeValue = 0;
+    if (frontal) {
+      expressionBaseline ??= currentExpression;
+      expressionMagnitudeValue = Math.max(
+        expressionMagnitude(currentExpression.jaw, expressionBaseline.jaw),
+        expressionMagnitude(currentExpression.smile, expressionBaseline.smile),
+      );
     }
-    head ??= { yaw: o.yaw, pitch: o.pitch, since: null };
-    const d = Math.max(Math.abs(o.yaw - head.yaw), Math.abs(o.pitch - head.pitch));
-    if (d >= P.headThreshold) {
-      if (head.since === null) {
-        head.since = o.timestamp;
-        head.count = 1;
-      } else if (++head.count >= 2 && o.timestamp - head.since >= P.holdMs) {
-        credit('head', o.timestamp);
-        head = { yaw: o.yaw, pitch: o.pitch, since: null };
-      }
-    } else head.since = null;
-    if (Math.abs(o.yaw) <= P.frontal && Math.abs(o.pitch) <= P.frontal) {
-      for (const [name, coefficient, geometry] of [
-        ['jaw', o.jawOpen, o.jawMotion],
-        ['smile', Math.min(o.mouthSmileLeft, o.mouthSmileRight), o.smileMotion],
-      ]) {
-        const s = (expressions[name] ??= { coefficient, geometry, since: null });
-        const dc = coefficient - s.coefficient,
-          dg = geometry - s.geometry;
-        const changed =
-          Math.abs(dc) >= P.expressionDelta &&
-          Math.abs(dg) >= P.expressionGeometry &&
-          (dc < 0 ? s.coefficient >= P.expressionPeak : coefficient >= P.expressionPeak);
-        if (changed) {
-          if (s.since === null) {
-            s.since = o.timestamp;
-            s.count = 1;
-          } else if (++s.count >= 2 && o.timestamp - s.since >= P.holdMs) {
-            credit('face', o.timestamp);
-            expressions[name] = { coefficient, geometry, since: null };
-          }
-        } else s.since = null;
-      }
-    } else expressions = {};
+    feed('expression', expressionMagnitudeValue, o.timestamp);
+    if (frontal && expressionMagnitudeValue === 0 && !channels.expression.active)
+      expressionBaseline = currentExpression;
+
+    feed('blink', blinkMagnitude(o), o.timestamp);
     return snapshot();
   }
-  return { update, snapshot, tick, pause, reset };
+  return { update, snapshot, tick: () => snapshot(), pause, reset };
 }

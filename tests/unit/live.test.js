@@ -435,13 +435,16 @@ describe('current per-face enrollment orchestration', () => {
       expect.arrayContaining(['blink', 'head']),
     );
   });
-  it('keeps enrollment checks ready when transient activity goes idle', async () => {
+  it('keeps enrollment checks ready when the live meter is left unchanged', async () => {
     const h = await gatedEnrollment();
     const before = structuredClone(h.flow.getSnapshot().sessions[0]);
     expect(before.meter.activity.score).toBeGreaterThan(0);
     await h.wait(16000);
     const after = h.flow.getSnapshot().sessions[0];
-    expect(after.meter.activity).toMatchObject({ score: 0, idle: true });
+    expect(after.meter.activity).toMatchObject({
+      score: before.meter.activity.score,
+      idle: false,
+    });
     expect(after.meter.status).toBe('passed_basic');
     expect(after.meter.accepted).toEqual(before.meter.accepted);
     expect(after.liveness.status).toBe('passed_basic');

@@ -128,7 +128,9 @@ export function validatePhysicalTrial(t, scope) {
     assetNames.add(asset.name);
   }
   assert(
-    t.meterPolicyVersion === 'motion-evidence-v1' && t.activityPolicyVersion === 'live-movement-v1',
+    t.meterPolicyVersion === 'motion-evidence-v1' &&
+      (t.activityPolicyVersion === 'live-movement-v1' ||
+        t.activityPolicyVersion === 'live-movement-v2'),
   );
   assert(exact(t.configuration, ['version', 'turnLeft', 'turnRight', 'blink']));
   validateLivenessSettings(t.configuration);

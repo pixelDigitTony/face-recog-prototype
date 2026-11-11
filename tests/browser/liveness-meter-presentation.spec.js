@@ -128,10 +128,8 @@ test('meter presentation updates collecting values at most five times per second
           acceptedAt: '2026-11-03T10:00:00.000Z',
           progress: { blink: 3, head: 3, expression: 0 },
           activity: {
-            policyVersion: 'live-movement-v1',
+            policyVersion: 'live-movement-v2',
             score,
-            faceScore: score / 2,
-            headScore: score / 2,
             lastMovementAt: idle ? null : 123,
             idle,
           },
@@ -143,8 +141,7 @@ test('meter presentation updates collecting values at most five times per second
     await expect(bar).toHaveClass(
       new RegExp(`MuiLinearProgress-color${color === 'success' ? 'Success' : 'Warning'}`),
     );
-    await expect(host).toContainText(`Face/blink ${score / 2}/50`);
-    await expect(host).toContainText(`Head ${score / 2}/50`);
+    await expect(host).not.toContainText('/50');
     await expect(host).toContainText(idle ? 'No recent movement' : 'Live movement');
     if (status === 'passed_basic') await expect(host).toContainText('Basic motion checks met');
   }

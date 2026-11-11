@@ -1,6 +1,6 @@
 # Live liveness movement score amendment - 2026-11-04
 
-Status: **Implemented and locally verified on 2026-11-05.** See the [parent acceptance audit](ANTHONYS_FACE_LAB_MOVEMENT_AND_PHYSICAL_EVALUATION_CHECKLIST.md).
+Status: **Superseded for the live meter.** The 50/50 buckets and 15-second reset below are no longer the live display. Detected movement now sets one calculated score, and that score changes only when a later movement calculates a different amount. Capture proof is unchanged. See the [parent acceptance audit](ANTHONYS_FACE_LAB_MOVEMENT_AND_PHYSICAL_EVALUATION_CHECKLIST.md) for the earlier verification.
 
 This amendment supersedes the live meter display/retention rules in ANTHONYS_FACE_LAB_LIVENESS_METER_SPEC.md. It does not reinterpret historical capture proof or lower enrollment checks.
 

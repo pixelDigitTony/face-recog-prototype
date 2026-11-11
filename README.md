@@ -188,7 +188,7 @@ and usability with a group still require evaluation.
 
 ## Liveness evidence meter
 
-Every tracked face on Enroll and Scan has its own live movement meter alongside detection confidence and match similarity. Blink or supported facial movement shares a maximum of 50 points; meaningful head rotation contributes the other 50. Qualified movement refreshes a 15-second inactivity timer, even when its bucket is full. Held poses and jitter do not refresh it. After 15 seconds without qualified movement, the live score resets to 0. Completed enrollment checks remain ready; their accepted proof and sealed captures do not reset.
+Every tracked face on Enroll and Scan has its own live movement meter alongside detection confidence and match similarity. Once a blink, supported expression, or head rotation is detected, the meter shows one calculated percentage for that movement. A later movement replaces the stored magnitude for that signal, so the meter rises or falls from the new calculation. Jitter, coefficient-only changes, and box translation do not count. The meter does not reset after a period of stillness. Completed enrollment checks remain ready; their accepted proof and sealed captures do not change with the live display.
 
 The original capture-proof algorithm remains separate: blink/head/expression weights are 40/25/35, requiring at least 60 points from two completed signal families and sufficient fresh observations over at least two seconds. Live movement reaching 100% does not replace this gate or the configured enrollment challenge. Neither percentage is a calibrated probability. See the [movement amendment](docs/ANTHONYS_FACE_LAB_LIVE_MOVEMENT_RETENTION_SPEC.md).
 

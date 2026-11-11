@@ -38,13 +38,19 @@ describe('guided meter enrollment', () => {
     expect(faceBefore.meter.activity.score).toBeGreaterThan(0);
     await h.wait(16000);
     const faceAfter = h.flow.getSnapshot().faces.find((f) => f.trackId === 1);
-    expect(faceAfter.meter.activity).toMatchObject({ score: 0, idle: true });
+    expect(faceAfter.meter.activity).toMatchObject({
+      score: faceBefore.meter.activity.score,
+      idle: false,
+    });
     expect(h.flow.getSnapshot().sessions[0].meter.accepted).toEqual(before);
     h.yaw[0] = 0;
     await h.wait(500);
-    expect(h.flow.getSnapshot().faces.find((f) => f.trackId === 1).meter.activity.headScore).toBe(
-      50,
-    );
+    h.eye[0] = 0.7;
+    await h.wait(200);
+    h.eye[0] = 0;
+    await h.wait(400);
+    // A smaller blink replaces the stored blink magnitude, so the visible meter falls.
+    expect(h.flow.getSnapshot().faces.find((f) => f.trackId === 1).meter.activity.score).toBe(65);
     expect(h.flow.getSnapshot().sessions[0].meter.accepted).toEqual(before);
   });
   it('keeps sealed review separate from a returning live face', async () => {

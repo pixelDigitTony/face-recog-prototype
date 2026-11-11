@@ -6,7 +6,7 @@ Status: **Implemented and locally verified. All 50 requirements reviewed by the 
 
 The assigning parent checks the final source against the specification and owns all browser QA. One Terra 6.1 xhigh coder owns runtime and unit implementation; the other owns UI, hooks and service integration. Automated results establish implementation behavior, not physical-camera accuracy or presentation-attack resistance.
 
-This audit records the original capture-proof baseline. The [movement and physical evaluation audit](ANTHONYS_FACE_LAB_MOVEMENT_AND_PHYSICAL_EVALUATION_CHECKLIST.md) covers the later 50/50 live display, 15-second idle reset and operator-run trial workflow. Original proof weights, validators and historical evidence remain unchanged; live display requirements are superseded by that amendment.
+This audit records the original capture-proof baseline. The [movement and physical evaluation audit](ANTHONYS_FACE_LAB_MOVEMENT_AND_PHYSICAL_EVALUATION_CHECKLIST.md) covered the former 50/50 live display and 15-second idle reset; the live meter now uses one calculated score instead. Original proof weights, validators and historical evidence remain unchanged.
 
 ## Parent audit record
 

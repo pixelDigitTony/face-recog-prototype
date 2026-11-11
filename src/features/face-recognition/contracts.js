@@ -76,11 +76,14 @@
  * deeply frozen services.meterPolicy identifies motion-evidence-v1. Meter state
  * and explicit challenge remain separate; face.meter exposes status, score,
  * progress, accepted, lastValidatedAt, paused, reason and live acceptedAt.
- * Optional face.meter.activity is transient {policyVersion:'live-movement-v1',
- * score:number, faceScore:number, headScore:number, lastMovementAt:number|null,
- * idle:boolean}. Face/blink and head contribute 0-50 each; score is their sum.
- * lastMovementAt uses the camera monotonic clock. Activity resets after 15000 ms
- * of inactivity; it does not alter the completed enrollment check or saved proof.
+ * Optional face.meter.activity is transient {policyVersion:'live-movement-v2',
+ * score:number, lastMovementAt:number|null, idle:boolean}. score is 0-100 from
+ * the calculated magnitude of blink, expression, and head rotation combined into
+ * one value. There is no 50/50 face and head split. A later movement replaces
+ * that signal's magnitude, so the meter rises or falls from the new calculation.
+ * Stillness does not reset it and does not alter the completed enrollment check
+ * or saved proof. lastMovementAt uses the camera monotonic clock. idle stays
+ * false; the field remains so older readers keep a stable shape.
  * Clients may fall back to meter.score when activity is absent in older ports.
  * Accepted proof binds cameraSessionId, enrollmentSessionId, trackId, worker
  * generation, assetIdentity, threshold, observation span/count, score, progress,

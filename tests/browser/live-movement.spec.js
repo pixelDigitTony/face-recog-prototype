@@ -16,7 +16,7 @@ const faceMeter = (page, id) =>
 const liveBar = (meter) =>
   meter.getByRole('progressbar', { name: 'Liveness evidence', exact: true });
 
-test('live 50/50 scores retain independent contributions until 15 seconds without actual movement', async ({
+test('live scores follow calculated movement and stay put without a timer reset', async ({
   page,
 }) => {
   await installMeterCamera(page, { faces: 2 });
@@ -35,40 +35,31 @@ test('live 50/50 scores retain independent contributions until 15 seconds withou
   await holdSignals(page, [0, 1], { eye: 0 }, 500);
   await holdSignals(page, [0], { eye: 1 }, 180);
   await holdSignals(page, [0], { eye: 0 }, 350);
-  await expect(liveBar(first)).toHaveAttribute('aria-valuenow', '50');
+  await expect(liveBar(first)).toHaveAttribute('aria-valuenow', '100');
   await expect(liveBar(second)).toHaveAttribute('aria-valuenow', '0');
-  await holdSignals(page, [0], { expression: 0.6 }, 500);
-  await holdSignals(page, [0], { expression: 0 }, 500);
-  await expect(liveBar(first)).toHaveAttribute('aria-valuenow', '50');
   await holdSignals(page, [1], { yaw: 8 }, 500);
   await holdSignals(page, [1], { yaw: 0 }, 500);
-  expect(Number(await liveBar(second).getAttribute('aria-valuenow'))).toBeGreaterThan(0);
-  expect(Number(await liveBar(second).getAttribute('aria-valuenow'))).toBeLessThanOrEqual(50);
+  await expect(liveBar(second)).toHaveAttribute('aria-valuenow', '32');
   await holdSignals(page, [1], { eye: 1 }, 180);
   await holdSignals(page, [1], { eye: 0 }, 350);
   await expect(liveBar(second)).toHaveAttribute('aria-valuenow', '100');
   const comparisons = await page.evaluate(() => window.__meterFixture.comparisons);
-  await page.evaluate(() => {
-    let changed = false;
-    window.__qaActivityTimer = setInterval(() => {
-      window.__meterFixture.yaw[1] = (changed = !changed) ? 8 : 0;
-    }, 500);
-  });
-  await page.waitForTimeout(11200);
-  await expect(liveBar(first)).toHaveAttribute('aria-valuenow', '50');
+  await page.waitForTimeout(15000);
+  await expect(liveBar(first)).toHaveAttribute('aria-valuenow', '100');
   await expect(liveBar(second)).toHaveAttribute('aria-valuenow', '100');
-  await expect(liveBar(first)).toHaveAttribute('aria-valuenow', '0', { timeout: 6500 });
-  await expect(liveBar(second)).toHaveAttribute('aria-valuenow', '100');
+  await holdSignals(page, [1], { eye: 0.7 }, 180);
+  await holdSignals(page, [1], { eye: 0 }, 350);
+  await expect(liveBar(second)).toHaveAttribute('aria-valuenow', '41');
+  await expect(liveBar(first)).toHaveAttribute('aria-valuenow', '100');
   await expect(list).toContainText('Recognized: Legacy 0');
   await expect(list).toContainText('Recognized: Legacy 1');
   expect(await page.evaluate(() => window.__meterFixture.comparisons)).toBe(comparisons);
   expect((await database(page)).identificationEvents).toHaveLength(2);
   await expect(page.getByTestId('face-instruction')).toHaveCount(0);
-  await page.evaluate(() => clearInterval(window.__qaActivityTimer));
   await page.screenshot({ path: '.local/live-movement-two-face-idle.png', fullPage: true });
 });
 
-test('head and facial jitter, held expressions and box translation cannot keep the activity timer alive', async ({
+test('jitter and box translation do not move the meter, and a held expression keeps its calculated score', async ({
   page,
 }) => {
   await installMeterCamera(page);
@@ -92,13 +83,13 @@ test('head and facial jitter, held expressions and box translation cannot keep t
   await expect(liveBar(meter)).toHaveAttribute('aria-valuenow', '0');
   await page.evaluate(() => clearInterval(window.__qaJitterTimer));
   await holdSignals(page, [0], { expression: 0.6, yaw: 0 }, 600);
-  await expect(liveBar(meter)).toHaveAttribute('aria-valuenow', '50');
-  // A held smile/jaw pose is stationary, even while coefficients remain high.
-  await expect(liveBar(meter)).toHaveAttribute('aria-valuenow', '0', { timeout: 16500 });
+  await expect(liveBar(meter)).toHaveAttribute('aria-valuenow', '72');
+  await page.waitForTimeout(15000);
+  await expect(liveBar(meter)).toHaveAttribute('aria-valuenow', '72');
   expect((await database(page)).identificationEvents).toHaveLength(1);
 });
 
-test('15-second activity reset does not revoke completed enrollment checks or alter their capture proof', async ({
+test('a still meter does not revoke completed enrollment checks or alter their capture proof', async ({
   page,
 }) => {
   await installMeterCamera(page);
@@ -114,7 +105,10 @@ test('15-second activity reset does not revoke completed enrollment checks or al
   await expect(meter).toContainText('Basic motion checks met');
   expect((await database(page)).templates).toHaveLength(0);
   const acceptedText = await meter.innerText();
-  await expect(liveBar(meter)).toHaveAttribute('aria-valuenow', '0', { timeout: 16500 });
+  const score = await liveBar(meter).getAttribute('aria-valuenow');
+  expect(Number(score)).toBeGreaterThan(0);
+  await page.waitForTimeout(15000);
+  await expect(liveBar(meter)).toHaveAttribute('aria-valuenow', score);
   await expect(meter).toContainText('Basic motion checks met');
   await expect(page.getByTestId('face-instruction').first()).not.toContainText(/Step \d/);
   expect((await database(page)).templates).toHaveLength(0);
@@ -126,6 +120,6 @@ test('15-second activity reset does not revoke completed enrollment checks or al
   expect(db.attempts[0].livenessMeter.policyVersion).toBe('motion-evidence-v1');
   expect(db.attempts[0].livenessMeter.acceptedScore).toBeGreaterThanOrEqual(60);
   expect(db.attempts[0].livenessStatus).toBe('passed_basic');
-  expect(JSON.stringify(db)).not.toContain('live-movement-v1');
+  expect(JSON.stringify(db)).not.toContain('live-movement-v');
   expect(acceptedText).toContain('Basic motion checks met');
 });

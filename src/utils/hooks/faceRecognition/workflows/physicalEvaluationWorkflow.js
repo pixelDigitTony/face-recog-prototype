@@ -1,6 +1,7 @@
 import { createFaceTracker } from '../recognition/faceTracker';
 import { associateFacePoses } from '../liveness/associateFacePoses';
 import { createLivenessMeter } from '../liveness/livenessMeter';
+import { LIVE_MOVEMENT_POLICY } from '../liveness/liveMovementPolicy';
 import { createActiveChallenge } from '../liveness/activeChallenge';
 import { livenessDisabled, validateLivenessSettings } from '../liveness/livenessPolicy';
 import { PHYSICAL_POLICY, validatePhysicalTrial } from '../repositories/physicalTrial';
@@ -191,7 +192,7 @@ export function createPhysicalEvaluationWorkflow({
             assets: (liveness.manifest?.assets ?? []).map(({ name, sha256 }) => ({ name, sha256 })),
           },
           meterPolicyVersion: 'motion-evidence-v1',
-          activityPolicyVersion: 'live-movement-v1',
+          activityPolicyVersion: LIVE_MOVEMENT_POLICY.version,
           configuration,
           cameraSessionId,
           workerGeneration,

@@ -34,46 +34,56 @@ describe('transient live movement', () => {
       );
     expect(a.snapshot()).toMatchObject({ score: 0, lastMovementAt: null, idle: false });
   });
-  it('shares 50 for blink and facial motion, independently of another track', () => {
+  it('calculates blink and expression magnitude independently of another track', () => {
     const a = make(),
       b = make();
     frames(a, 0, 400);
     frames(a, 450, 550, { eyeBlinkLeft: 0.9, eyeBlinkRight: 0.9 });
     frames(a, 600, 800);
-    expect(a.snapshot()).toMatchObject({ faceScore: 50, headScore: 0, score: 50 });
-    frames(a, 850, 1200, { jawOpen: 0.6, jawMotion: 0.16 });
-    expect(a.snapshot().faceScore).toBe(50);
+    // Closure 0.9 maps to (0.9 - 0.6) / 0.4 = 0.75.
+    expect(a.snapshot().score).toBe(75);
+    frames(a, 850, 1200, { jawOpen: 0.8, jawMotion: 0.2 });
+    // A larger expression replaces the weaker blink in the face term and fills the meter.
+    expect(a.snapshot().score).toBe(100);
+    frames(a, 1250, 1600);
+    frames(a, 1650, 2000, { jawOpen: 0.45, jawMotion: 0.15 });
+    frames(a, 2050, 2400);
+    // The smaller expression leaves the stronger blink, so the meter falls to 75.
+    expect(a.snapshot().score).toBe(75);
     expect(b.snapshot().score).toBe(0);
   });
-  it('credits large rotations and refreshes on subsequent movements but not on held poses', () => {
+  it('raises and lowers the meter from head magnitude and does not reset on a timer', () => {
     const a = make();
     frames(a, 0, 400);
     frames(a, 450, 800, { yaw: 25 });
-    expect(a.snapshot()).toMatchObject({ headScore: 50, score: 50 });
+    expect(a.snapshot().score).toBe(100);
     const first = a.snapshot().lastMovementAt;
-    frames(a, 850, 14000, { yaw: 25 });
-    expect(a.snapshot().lastMovementAt).toBe(first);
-    frames(a, 14050, 14400, { yaw: 32 });
-    expect(a.snapshot().lastMovementAt).toBeGreaterThan(first);
-    const refreshed = a.snapshot().lastMovementAt;
-    frames(a, 14450, 20000, { yaw: 32 });
-    expect(a.snapshot()).toMatchObject({ score: 50, lastMovementAt: refreshed });
-    expect(a.tick(refreshed + 14999).score).toBe(50);
-    expect(a.tick(refreshed + 15000)).toMatchObject({ score: 0, idle: true, lastMovementAt: null });
-    frames(a, 30000, 30500, { yaw: 32 });
-    frames(a, 30550, 30900, { yaw: 25 });
-    expect(a.snapshot()).toMatchObject({ score: 50, idle: false });
+    frames(a, 850, 20000, { yaw: 25 });
+    expect(a.snapshot()).toMatchObject({ score: 100, lastMovementAt: first, idle: false });
+    expect(a.tick(first + 15000)).toMatchObject({
+      score: 100,
+      idle: false,
+      lastMovementAt: first,
+    });
+    frames(a, 20050, 20500, { yaw: 0 });
+    frames(a, 20550, 21000, { yaw: 8 });
+    frames(a, 21050, 21400, { yaw: 0 });
+    // 8° / 25° is 32, and that completed turn replaces the earlier full turn.
+    expect(a.snapshot().score).toBe(32);
+    expect(a.tick(a.snapshot().lastMovementAt + 20000).score).toBe(32);
   });
-  it('refreshes facial motion in a full bucket without refreshing a held expression', () => {
+  it('increases a held expression when the movement itself gets larger', () => {
     const a = make();
     frames(a, 0, 400);
     frames(a, 450, 800, { jawOpen: 0.4, jawMotion: 0.14 });
+    // Coefficient change 0.35 and geometry change 0.04 → min(0.7, 0.4) = 0.4.
+    expect(a.snapshot().score).toBe(40);
     const first = a.snapshot().lastMovementAt;
     frames(a, 850, 12000, { jawOpen: 0.4, jawMotion: 0.14 });
-    expect(a.snapshot().lastMovementAt).toBe(first);
+    expect(a.snapshot()).toMatchObject({ score: 40, lastMovementAt: first });
     frames(a, 12050, 12400, { jawOpen: 0.7, jawMotion: 0.19 });
+    expect(a.snapshot().score).toBe(90);
     expect(a.snapshot().lastMovementAt).toBeGreaterThan(first);
-    expect(a.snapshot().faceScore).toBe(50);
   });
   it('ignores invalid, stale, duplicate and out-of-order observations', () => {
     const a = make();
@@ -89,7 +99,7 @@ describe('transient live movement', () => {
     a.pause();
     expect(a.snapshot()).toEqual(before);
   });
-  it('combines independent buckets and does not mutate accepted proof after idle reset', () => {
+  it('keeps the calculated score and does not mutate accepted proof while the face is still', () => {
     const m = createLivenessMeter({
       cameraSessionId: 'c',
       enrollmentSessionId: 'e',
@@ -111,12 +121,14 @@ describe('transient live movement', () => {
     }
     const passed = m.snapshot();
     expect(passed.status).toBe('passed_basic');
-    expect(passed.activity).toMatchObject({ score: 100, faceScore: 50, headScore: 50 });
+    // Smile magnitude 0.7 and a later 8° turn (0.32) combine to 77.
+    expect(passed.activity.score).toBe(77);
+    expect(passed.activity.idle).toBe(false);
     m.tick(passed.activity.lastMovementAt + 15000);
-    const idle = m.snapshot();
-    expect(idle.activity).toMatchObject({ score: 0, idle: true });
-    expect(idle.status).toBe('passed_basic');
-    expect(idle.accepted).toEqual(passed.accepted);
-    expect(idle.score).toBe(passed.score);
+    const still = m.snapshot();
+    expect(still.activity).toMatchObject({ score: 77, idle: false });
+    expect(still.status).toBe('passed_basic');
+    expect(still.accepted).toEqual(passed.accepted);
+    expect(still.score).toBe(passed.score);
   });
 });

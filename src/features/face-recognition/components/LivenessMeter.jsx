@@ -85,15 +85,6 @@ export function LivenessMeter({ meter, instructions = false, compact = false }) 
           aria-valuetext={`${score}% - ${liveActivity ? `${activityLabel}; ${label}` : label}`}
         />
       )}
-      {liveActivity &&
-        !compact &&
-        Number.isFinite(activity.faceScore) &&
-        Number.isFinite(activity.headScore) && (
-          <Typography component="div" variant="caption" color="text.secondary">
-            Face/blink {Math.round(activity.faceScore)}/50 · Head {Math.round(activity.headScore)}
-            /50
-          </Typography>
-        )}
       {instructions && status === 'collecting' && (
         <Typography component="div" variant="caption">
           {hint}
