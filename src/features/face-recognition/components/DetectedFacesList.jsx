@@ -13,6 +13,7 @@ export function DetectedFacesList({
   liveness,
   identification = false,
   purpose = 'verify',
+  passRate = 90,
 }) {
   return (
     <>
@@ -42,7 +43,11 @@ export function DetectedFacesList({
                     : `${face.reasonCode?.replaceAll('_', ' ') || status.replaceAll('_', ' ')}${person ? ` · Verifying against ${person.displayName} (${person.employeeCode})` : ''} · Match: ${formatPercentage(similarity)} · Liveness: ${livenessLabel(liveness)}`}
                 </Typography>
               )}
-              <LivenessMeter meter={face.meter} instructions={!identification} />
+              <LivenessMeter
+                meter={face.meter}
+                instructions={!identification}
+                passRate={passRate}
+              />
               <LightingFeedback lighting={face.quality?.lighting} guidance={!identification} />
             </Box>
           </ListItem>

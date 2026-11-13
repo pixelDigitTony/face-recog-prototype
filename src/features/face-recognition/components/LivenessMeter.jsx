@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box, LinearProgress, Typography } from '@mui/material';
+import { livenessPassRate } from '@/utils/hooks/faceRecognition/liveness/liveMovementPolicy';
 
 const labels = {
   initializing: 'Starting liveness analysis',
@@ -9,7 +10,12 @@ const labels = {
   unavailable: 'Liveness unavailable',
   invalidated: 'Rechecking liveness',
 };
-export function LivenessMeter({ meter, instructions = false, compact = false }) {
+export function LivenessMeter({
+  meter,
+  instructions = false,
+  compact = false,
+  passRate = 90,
+}) {
   const [shown, setShown] = useState(meter);
   const latest = useRef(meter);
   latest.current = meter;
@@ -31,6 +37,8 @@ export function LivenessMeter({ meter, instructions = false, compact = false }) 
   const value = liveActivity ? activity.score : shown.score;
   const numeric = canShowNumber && Number.isFinite(value);
   const score = numeric ? Math.round(Math.max(0, Math.min(100, value))) : null;
+  const passing = livenessPassRate(passRate);
+  const rateMet = score !== null && score >= passing;
   const activityLabel = activity?.idle ? 'No recent movement' : 'Live movement';
   const announcement = liveActivity ? `${label} - ${activityLabel}` : label;
   const hint =
@@ -80,9 +88,7 @@ export function LivenessMeter({ meter, instructions = false, compact = false }) 
         <LinearProgress
           variant="determinate"
           value={score}
-          color={
-            status === 'passed_basic' && (!liveActivity || score === 100) ? 'success' : 'warning'
-          }
+          color={rateMet || status === 'passed_basic' ? 'success' : 'warning'}
           aria-label="Liveness evidence"
           aria-valuetext={`${score}% - ${liveActivity ? `${activityLabel}; ${label}` : label}`}
         />

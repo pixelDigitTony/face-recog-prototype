@@ -1,6 +1,7 @@
 import { validatePhysicalTrial } from './physicalTrial';
 import { LIVENESS_METER_POLICY } from '../liveness/livenessMeterPolicy';
 import { livenessDisabled } from '../liveness/livenessPolicy';
+import { livenessPassRate } from '../liveness/liveMovementPolicy';
 import {
   evaluateTrial,
   validateEvaluationTrial,
@@ -469,9 +470,18 @@ export function createLocalStorageRepository({
               fail('Enable at least one enrollment challenge in Settings');
             if (operation.settings.matchThreshold !== 0.85)
               fail('Live matching requires strictly above 85%.');
+            const passRate = livenessPassRate(
+              operation.settings.livenessPassRate ?? db.settings.livenessPassRate,
+            );
+            if (
+              operation.settings.livenessPassRate !== undefined &&
+              operation.settings.livenessPassRate !== passRate
+            )
+              fail('Liveness passing rate must be a whole number from 1 to 100.');
             db.settings = {
               ...db.settings,
               matchThreshold: operation.settings.matchThreshold,
+              livenessPassRate: passRate,
               saveThumbnails: operation.settings.saveThumbnails,
               enrollmentLiveness: structuredClone(
                 operation.settings.enrollmentLiveness ?? db.settings.enrollmentLiveness,

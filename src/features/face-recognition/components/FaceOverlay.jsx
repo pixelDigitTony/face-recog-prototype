@@ -27,6 +27,7 @@ function FaceLabel({
   similarity,
   maxLabelWidth,
   labelLeft,
+  passRate,
 }) {
   const ref = useRef(null),
     [height, setHeight] = useState(64);
@@ -93,7 +94,12 @@ function FaceLabel({
           </>
         )}
       </Box>
-      <LivenessMeter meter={face.meter} instructions={showInstructions} compact />
+      <LivenessMeter
+        meter={face.meter}
+        instructions={showInstructions}
+        compact
+        passRate={passRate}
+      />
       <LightingFeedback lighting={face.quality?.lighting} guidance={showInstructions} />
     </Box>
   );
@@ -107,6 +113,7 @@ export function FaceOverlay({
   status,
   actionLabel,
   similarity = null,
+  passRate = 90,
 }) {
   const ref = useRef(null),
     [size, setSize] = useState([0, 0]);
@@ -174,6 +181,7 @@ export function FaceOverlay({
                 liveness={face.enrollment?.liveness ?? liveness}
                 status={face.enrollment?.status ?? (faces.length > 1 ? 'multiple_faces' : status)}
                 actionLabel={actionLabel}
+                passRate={passRate}
                 similarity={
                   face.identification
                     ? face.identification.similarity

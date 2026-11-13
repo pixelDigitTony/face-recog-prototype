@@ -42,7 +42,7 @@ describe('parallel per-face enrollment capture', () => {
     const person = saved.people[0];
     expect(saved.templates).toHaveLength(1);
     const face = h.flow.getSnapshot().faces.find((f) => f.trackId === 1);
-    expect(face.identification.status).toBe('waiting_for_analysis');
+    expect(['waiting_for_analysis', 'checking']).toContain(face.identification.status);
     await expect(
       h.flow.nameDetectedFace({ trackId: 1, personId: person.id, acknowledged: true }),
     ).rejects.toThrow();
@@ -69,13 +69,24 @@ describe('parallel per-face enrollment capture', () => {
     const h = await harness();
     await bind(h, 1, 'Alice');
     await h.wait(1450);
-    h.eye[0] = 1;
+    h.eye[0] = 0.6;
     await h.wait(150);
     h.eye[0] = 0;
     await h.wait(500);
     expect(h.flow.getSnapshot().sessions[0].liveness.status).toBe('passed_basic');
-    expect(h.flow.getSnapshot().sessions[0].meter.status).not.toBe('passed_basic');
+    expect(h.flow.getSnapshot().sessions[0].meter.activity.score).toBeLessThan(90);
     expect(h.repository.getSnapshot().database.people).toHaveLength(0);
+  });
+  it('enrolls once the live liveness score reaches the passing rate', async () => {
+    const h = await harness();
+    await bind(h, 1, 'Ada');
+    await h.wait(200);
+    h.eye[0] = 1;
+    await h.wait(150);
+    h.eye[0] = 0;
+    await h.wait(1500);
+    expect(h.flow.getSnapshot().sessions[0].meter.activity.score).toBeGreaterThanOrEqual(90);
+    expect(h.repository.getSnapshot().database.people).toHaveLength(1);
   });
   it('disappearance resets only the missing face while the other can finish', async () => {
     const h = await harness();

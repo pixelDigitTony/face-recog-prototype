@@ -80,7 +80,11 @@ function EnrollmentTrackCard({ face, session, database, live, count }) {
         {formatPercentage(face?.identification?.similarity)}
       </Typography>
       {face && <ClosestRecord identification={face.identification} />}
-      <LivenessMeter meter={face?.meter ?? session?.meter} instructions />
+      <LivenessMeter
+        meter={face?.meter ?? session?.meter}
+        instructions
+        passRate={database.settings?.livenessPassRate}
+      />
       {!face && (
         <Typography>
           This face is outside the current feed. Its saved or sealed capture remains attached to
@@ -322,6 +326,7 @@ export function AutomaticEnrollmentWorkspace() {
                   status={live.status}
                   liveness={live.liveness}
                   actionLabel="Automatic enrollment"
+                  passRate={db.database.settings?.livenessPassRate}
                 />
               </Box>
               {live.camera.active && (
@@ -394,6 +399,7 @@ export function AutomaticEnrollmentWorkspace() {
                 liveness={live.liveness}
                 identification
                 purpose="enroll"
+                passRate={db.database.settings?.livenessPassRate}
               />
               {live.latencyMs != null && (
                 <Typography variant="caption">

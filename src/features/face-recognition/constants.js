@@ -19,6 +19,7 @@ export const OUTCOMES = [
 ];
 export const defaultSettings = Object.freeze({
   matchThreshold: 0.85,
+  livenessPassRate: 90,
   enrollmentLiveness: DEFAULT_LIVENESS,
   saveThumbnails: true,
   maxPeople: 50,

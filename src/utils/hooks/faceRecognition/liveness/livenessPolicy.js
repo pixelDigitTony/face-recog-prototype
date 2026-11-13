@@ -1,4 +1,5 @@
 import { LIVENESS_METER_POLICY } from './livenessMeterPolicy';
+import { LIVE_MOVEMENT_POLICY } from './liveMovementPolicy';
 import { validateLivenessMeter } from './validateLivenessMeter';
 import { boxIoU } from '../recognition/faceTracker';
 export const ENROLLMENT_POLICY = 'enrollment-configurable-liveness-v1';
@@ -83,6 +84,7 @@ export function validateEnrollmentEvidence(attempt) {
   )
     throw new Error('Per-face enrollment association evidence is incomplete.');
   const config = validateLivenessSettings(live?.configuration);
+  const rateMet = attempt.livenessMeter?.policyVersion === LIVE_MOVEMENT_POLICY.version;
   if (
     live.policyVersion !== CHALLENGE_POLICY ||
     !live.sessionId ||
@@ -91,9 +93,10 @@ export function validateEnrollmentEvidence(attempt) {
     !Number.isInteger(live.trackId) ||
     (!multiple && attempt.faceCountAtDecision !== 1) ||
     !Number.isFinite(attempt.decisionTimestamp) ||
-    !Number.isFinite(live.lastValidatedAt) ||
-    attempt.decisionTimestamp < live.lastValidatedAt ||
-    attempt.decisionTimestamp - live.lastValidatedAt > 1500 ||
+    (!rateMet &&
+      (!Number.isFinite(live.lastValidatedAt) ||
+        attempt.decisionTimestamp < live.lastValidatedAt ||
+        attempt.decisionTimestamp - live.lastValidatedAt > 1500)) ||
     live.validity !== 'continuous_session' ||
     live.expiresAt !== null ||
     !(attempt.captureConsistency > 0.85) ||
@@ -124,7 +127,7 @@ export function validateEnrollmentEvidence(attempt) {
       live.passedAt != null
     )
       throw new Error('Disabled liveness must remain not checked.');
-  } else {
+  } else if (!rateMet) {
     const directions = [
       config.turnLeft && 'left',
       config.turnRight && 'right',

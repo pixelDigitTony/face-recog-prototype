@@ -370,7 +370,7 @@ describe('current per-face enrollment orchestration', () => {
     await h.wait(12000);
     expect(h.repository.getSnapshot().database.attempts).toHaveLength(0);
     expect(h.flow.getSnapshot().sessions[0].liveness.status).toBe('checking');
-    h.eye[0] = 1;
+    h.eye[0] = 0.6;
     await h.wait(150);
     h.eye[0] = 0;
     await h.wait(400);

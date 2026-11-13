@@ -2,6 +2,18 @@
 // A qualified movement contributes its measured magnitude. Blink and expression
 // share the face term (the stronger one), then combine with head rotation into
 // one 0-100 score. Nothing expires on a timer.
+export const DEFAULT_LIVENESS_PASS_RATE = 90;
+
+export function livenessPassRate(value) {
+  return Number.isInteger(value) && value >= 1 && value <= 100
+    ? value
+    : DEFAULT_LIVENESS_PASS_RATE;
+}
+
+export function livenessMeterReady(score, rate) {
+  return Number.isFinite(score) && score >= livenessPassRate(rate);
+}
+
 export const LIVE_MOVEMENT_POLICY = Object.freeze({
   version: 'live-movement-v2',
   maxGapMs: 200,

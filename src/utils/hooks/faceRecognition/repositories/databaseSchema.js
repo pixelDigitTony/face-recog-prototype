@@ -61,7 +61,11 @@ export function validateDatabase(db, scope, legacy = false) {
     !Number.isFinite(settings.matchThreshold) ||
     Math.abs(settings.matchThreshold) > 1 ||
     typeof settings.saveThumbnails !== 'boolean' ||
-    settings.displayTimeZone !== 'Asia/Manila'
+    settings.displayTimeZone !== 'Asia/Manila' ||
+    (settings.livenessPassRate !== undefined &&
+      (!Number.isInteger(settings.livenessPassRate) ||
+        settings.livenessPassRate < 1 ||
+        settings.livenessPassRate > 100))
   )
     fail('Invalid settings.');
   for (const key of ['maxPeople', 'maxAttempts', 'maxEstimatedBytes'])

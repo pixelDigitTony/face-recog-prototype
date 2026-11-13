@@ -13,6 +13,7 @@ import {
 import { cosineSimilarity } from '../recognition/cosineSimilarity';
 import { thumbnail } from '../recognition/imageQuality';
 import { LIVE_TIMING } from '../recognition/liveTiming';
+import { LIVE_MOVEMENT_POLICY, livenessMeterReady, livenessPassRate } from '../liveness/liveMovementPolicy';
 
 const terminal = (status) =>
   [
@@ -104,10 +105,7 @@ export function createMultiEnrollmentWorkflow({
       ...session.challenge.snapshot(),
       ...(challengeReady(session.challenge.snapshot())
         ? {
-            prompt:
-              session.meter.snapshot().status === 'passed_basic'
-                ? capturePrompt(session)
-                : 'Enrollment challenge complete',
+            prompt: meterReady(session) ? capturePrompt(session) : 'Enrollment challenge complete',
           }
         : {}),
     },
@@ -181,6 +179,38 @@ export function createMultiEnrollmentWorkflow({
           person.acknowledgedAt === s.person.acknowledgedAt)
     );
   }
+  const meterReady = (session) =>
+    livenessMeterReady(
+      session.meter.snapshot().activity?.score,
+      session.settings?.livenessPassRate,
+    );
+  function enrollmentMeterProof(session, timestamp) {
+    const snapshot = session.meter.snapshot();
+    if (snapshot.accepted) return structuredClone(snapshot.accepted);
+    const rate = livenessPassRate(session.settings?.livenessPassRate);
+    const score = snapshot.activity?.score;
+    const assetIdentity = liveness.manifest?.sha256;
+    if (
+      !livenessMeterReady(score, rate) ||
+      typeof assetIdentity !== 'string' ||
+      !assetIdentity
+    )
+      return null;
+    return {
+      policyVersion: LIVE_MOVEMENT_POLICY.version,
+      cameraSessionId: state.sessionId,
+      enrollmentSessionId: session.id,
+      trackId: session.trackId,
+      workerGeneration: meterGeneration,
+      assetIdentity,
+      status: 'passed_basic',
+      acceptedScore: score,
+      threshold: rate,
+      passedAt: Number.isFinite(snapshot.activity?.lastMovementAt)
+        ? snapshot.activity.lastMovementAt
+        : timestamp,
+    };
+  }
   const capturePrompt = (s) =>
     s.guided
       ? [
@@ -213,9 +243,15 @@ export function createMultiEnrollmentWorkflow({
       !faces.some(
         (current) => current.trackId === s.trackId && !current.ambiguous && !current.reasonCode,
       ) ||
-      s.meter.snapshot().status !== 'passed_basic' ||
+      !meterReady(s) ||
       (liveness.generation != null && liveness.generation !== meterGeneration)
     ) {
+      s.candidate = null;
+      s.status = 'preparing_enrollment';
+      return;
+    }
+    const meterProof = enrollmentMeterProof(s, timestamp);
+    if (!meterProof) {
       s.candidate = null;
       s.status = 'preparing_enrollment';
       return;
@@ -230,7 +266,7 @@ export function createMultiEnrollmentWorkflow({
       sessionId: s.id,
       enrollmentPolicyVersion: LIVENESS_METER_POLICY.enrollmentPolicy,
       livenessMeter: {
-        ...s.meter.snapshot().accepted,
+        ...meterProof,
         capture: {
           captureTimestamp: timestamp,
           poseTimestamp: association.pose.timestamp,
@@ -596,6 +632,19 @@ export function createMultiEnrollmentWorkflow({
         const active = [...sessions.values()].some((s) => !terminal(s.status));
         const includeEmbedding =
           (discovery.needsEmbedding() || active) && timestamp - lastComparison >= 334;
+        // Keep a private pixel copy. The recognition worker receives the camera
+        // buffer, and the enrollment photo is encoded after that call returns.
+        let photoFrame = frame;
+        if (active && frame?.data?.length)
+          try {
+            photoFrame = {
+              data: new Uint8ClampedArray(frame.data),
+              width: frame.width,
+              height: frame.height,
+            };
+          } catch {
+            photoFrame = frame;
+          }
         const extracted = await engine.analyzeFrame(frame, {
           includeEmbedding,
           analyzeAllFaces: true,
@@ -701,7 +750,7 @@ export function createMultiEnrollmentWorkflow({
             cancelSession(s, 'Enrollment changed. Confirm this person again.');
             continue;
           }
-          if (!challengeReady(live) || s.meter.snapshot().status !== 'passed_basic') {
+          if (!meterReady(s)) {
             s.status = 'challenging';
             continue;
           }
@@ -734,7 +783,7 @@ export function createMultiEnrollmentWorkflow({
           }
           s.error = null;
           try {
-            await capture(s, face, vector, frame, timestamp, match, token);
+            await capture(s, face, vector, photoFrame, timestamp, match, token);
           } catch (error) {
             s.error = error.message;
             s.status = 'quality_blocked';

@@ -1,7 +1,87 @@
 import { LIVENESS_METER_POLICY as P, meterQualifies, meterScore } from './livenessMeterPolicy';
+import { LIVE_MOVEMENT_POLICY, livenessMeterReady } from './liveMovementPolicy';
+
+function validateLiveScoreProof(proof, binding) {
+  const invalid = () => {
+    throw new Error('Invalid motion evidence.');
+  };
+  const fields = [
+    'policyVersion',
+    'cameraSessionId',
+    'enrollmentSessionId',
+    'trackId',
+    'workerGeneration',
+    'assetIdentity',
+    'status',
+    'acceptedScore',
+    'threshold',
+    'passedAt',
+    'capture',
+  ];
+  if (
+    !proof ||
+    typeof proof !== 'object' ||
+    proof.policyVersion !== LIVE_MOVEMENT_POLICY.version ||
+    Object.keys(proof).some((key) => !fields.includes(key)) ||
+    proof.status !== 'passed_basic' ||
+    !livenessMeterReady(proof.acceptedScore, proof.threshold) ||
+    proof.acceptedScore > 100 ||
+    typeof proof.assetIdentity !== 'string' ||
+    !proof.assetIdentity ||
+    proof.assetIdentity.length > 128 ||
+    typeof proof.cameraSessionId !== 'string' ||
+    !proof.cameraSessionId ||
+    proof.cameraSessionId.length > 128 ||
+    typeof proof.enrollmentSessionId !== 'string' ||
+    !proof.enrollmentSessionId ||
+    proof.enrollmentSessionId.length > 128 ||
+    !Number.isInteger(proof.trackId) ||
+    proof.trackId < 1 ||
+    !Number.isInteger(proof.workerGeneration) ||
+    proof.workerGeneration < 0 ||
+    !Number.isFinite(proof.passedAt)
+  )
+    invalid();
+  if (
+    proof.capture &&
+    (typeof proof.capture !== 'object' ||
+      Object.keys(proof.capture).sort().join(',') !==
+        'captureTimestamp,decisionTimestamp,exclusive,poseTimestamp' ||
+      !Number.isFinite(proof.capture.captureTimestamp) ||
+      !Number.isFinite(proof.capture.poseTimestamp) ||
+      !Number.isFinite(proof.capture.decisionTimestamp) ||
+      proof.capture.captureTimestamp < proof.passedAt ||
+      proof.capture.decisionTimestamp < proof.capture.captureTimestamp ||
+      proof.capture.decisionTimestamp - proof.capture.captureTimestamp > P.captureFreshnessMs ||
+      Math.abs(proof.capture.captureTimestamp - proof.capture.poseTimestamp) >
+        P.captureFreshnessMs ||
+      proof.capture.decisionTimestamp < proof.capture.poseTimestamp ||
+      proof.capture.decisionTimestamp - proof.capture.poseTimestamp > P.captureFreshnessMs ||
+      proof.capture.exclusive !== true)
+  )
+    invalid();
+  if (
+    binding &&
+    (!proof.capture ||
+      proof.capture.captureTimestamp !== binding.captureTimestamp ||
+      proof.capture.poseTimestamp !== binding.poseTimestamp ||
+      proof.capture.decisionTimestamp !== binding.decisionTimestamp ||
+      proof.enrollmentSessionId !== binding.sessionId ||
+      proof.trackId !== binding.trackId ||
+      proof.cameraSessionId !== binding.cameraSessionId ||
+      proof.workerGeneration !== binding.workerGeneration ||
+      proof.assetIdentity !== binding.assetIdentity ||
+      binding.exclusive !== true)
+  )
+    invalid();
+}
 
 // This validates internal consistency, not camera authenticity.
 export function validateLivenessMeter(proof, binding) {
+  if (proof?.policyVersion === LIVE_MOVEMENT_POLICY.version) {
+    validateLiveScoreProof(proof, binding);
+    return;
+  }
   const invalid = () => {
     throw new Error('Invalid motion evidence.');
   };

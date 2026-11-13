@@ -71,11 +71,21 @@ export function SettingsPage() {
                     setError('Enable at least one enrollment challenge in Settings.');
                     return;
                   }
+                  const livenessPassRate = Number(data.get('livenessPassRate'));
+                  if (
+                    !Number.isInteger(livenessPassRate) ||
+                    livenessPassRate < 1 ||
+                    livenessPassRate > 100
+                  ) {
+                    setError('Liveness passing rate must be a whole number from 1 to 100.');
+                    return;
+                  }
                   try {
                     await repository.commit({
                       type: 'settings',
                       settings: {
                         matchThreshold: 0.85,
+                        livenessPassRate,
                         saveThumbnails: data.has('thumbnails'),
                         enrollmentLiveness: {
                           version: 1,
@@ -111,6 +121,15 @@ export function SettingsPage() {
                     with enrollment and diagnostic captures. Automatic identification stores score
                     summaries only.
                   </Typography>
+                  <TextField
+                    name="livenessPassRate"
+                    label="Liveness passing rate (%)"
+                    defaultValue={settings.livenessPassRate ?? 90}
+                    type="number"
+                    required
+                    slotProps={{ htmlInput: { min: 1, max: 100, step: 1 } }}
+                    helperText="Enrollment can proceed when the live liveness meter reaches this percentage. The default is 90."
+                  />
                   <Typography variant="h6">Enrollment liveness</Typography>
                   <Typography variant="body2">
                     Applies to the next enrollment session. Scan stays automatic. These are basic
@@ -130,7 +149,7 @@ export function SettingsPage() {
                     />
                   ))}
                   <Typography variant="caption">
-                    Liveness evidence meter required for live enrollment. Once blink, expression, or
+                    Liveness evidence meter required for live enrollment. Reaching the passing rate above lets that face continue to enrollment. Once blink, expression, or
                     head movement is detected, the meter shows the calculated amount of that
                     movement. It rises or falls only when a new movement calculates a different
                     amount, and it does not reset on a timer. A completed enrollment check remains
